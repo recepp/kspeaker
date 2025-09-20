@@ -76,7 +76,7 @@ const ChatScreen: React.FC = () => {
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder="Mesaj yazın veya mikrofona konuşun..."
+          placeholder="Type a message or speak to the mic..."
           onSubmitEditing={handleSend}
           returnKeyType="send"
         />
@@ -98,7 +98,7 @@ const styles = StyleSheet.create({
   messages: {
     flex: 1,
     marginBottom: 8,
-    marginTop: 16,
+    marginTop: 40,
   },
   messageBubble: {
     padding: 10,
