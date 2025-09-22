@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { SafeAreaView, View, Text, TextInput, Button, FlatList, StyleSheet, TouchableOpacity, Keyboard, Platform, Alert, KeyboardAvoidingView, Image } from 'react-native';
+import { View, Text, TextInput, Button, FlatList, StyleSheet, TouchableOpacity, Keyboard, Platform, Alert, KeyboardAvoidingView, Image } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { sendChatMessage } from './api';
 import { startListening, stopListening } from './speech';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -392,12 +393,17 @@ const ChatScreen: React.FC = () => {
       />
       <View style={styles.inputContainer}>
         <TextInput
-          style={styles.input}
+          style={[
+            styles.input,
+            listening && styles.inputListening
+          ]}
           value={input}
           onChangeText={setInput}
-          placeholder="Type Anything"
+          placeholder={listening ? "Listening..." : "Type Anything"}
+          placeholderTextColor={listening ? "#007AFF" : "#999"}
           onSubmitEditing={handleSend}
           returnKeyType="send"
+          editable={!listening}
         />
         {ttsActive ? (
           <TouchableOpacity onPress={handleStopTTS} style={styles.micButton}>
@@ -412,8 +418,15 @@ const ChatScreen: React.FC = () => {
             )}
           </TouchableOpacity>
         )}
-        <TouchableOpacity onPress={handleSend} style={styles.sendButton}>
-          <View style={styles.sendIconWrapper}>
+        <TouchableOpacity 
+          onPress={handleSend} 
+          style={styles.sendButton}
+          disabled={!input.trim()}
+        >
+          <View style={[
+            styles.sendIconWrapper,
+            input.trim() ? styles.sendIconWrapperActive : styles.sendIconWrapperInactive
+          ]}>
             <Ionicons name="arrow-up" size={32} color="#fff" />
           </View>
         </TouchableOpacity>
@@ -501,13 +514,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#222',
   },
+  inputListening: {
+    backgroundColor: '#E3F2FD',
+    color: '#007AFF',
+  },
   micButton: {
     marginRight: 8,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendButton: {
-    backgroundColor: '#e1e1e1',
     borderRadius: 16,
     padding: 4,
     justifyContent: 'center',
@@ -518,7 +534,6 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#e1e1e1',
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
@@ -526,6 +541,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 4,
     elevation: 2,
+  },
+  sendIconWrapperActive: {
+    backgroundColor: '#007AFF',
+  },
+  sendIconWrapperInactive: {
+    backgroundColor: '#e1e1e1',
   },
 });
 
