@@ -4,6 +4,7 @@ import { View, Text, TextInput, Button, FlatList, StyleSheet, TouchableOpacity, 
 import { sendChatMessage } from './api';
 import { startListening, stopListening } from './speech';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import Tts from 'react-native-tts';
 
 interface Message {
@@ -98,7 +99,7 @@ const ChatScreen: React.FC = () => {
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder="Type a message or speak into the microphone..."
+          placeholder="Type Anything"
           onSubmitEditing={handleSend}
           returnKeyType="send"
         />
@@ -109,7 +110,11 @@ const ChatScreen: React.FC = () => {
             <MaterialCommunityIcons name="microphone" size={32} color="#555" />
           )}
         </TouchableOpacity>
-        <Button title="Send" onPress={handleSend} />
+        <TouchableOpacity onPress={handleSend} style={styles.sendButton}>
+          <View style={styles.sendIconWrapper}>
+            <Ionicons name="arrow-up" size={32} color="#fff" />
+          </View>
+        </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   );
@@ -144,6 +149,7 @@ const styles = StyleSheet.create({
     flex: 1,
     marginBottom: 8,
     marginTop: 64,
+    paddingBottom: 32,
   },
   messageBubble: {
     padding: 10,
@@ -168,21 +174,53 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 24,
+    borderRadius: 24,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
   },
   input: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 16,
-    padding: 10,
+    borderWidth: 0,
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     marginRight: 8,
-    backgroundColor: '#f9f9f9',
+    backgroundColor: '#f5f5f7',
+    fontSize: 16,
+    color: '#222',
   },
   micButton: {
     marginRight: 8,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  sendButton: {
+    backgroundColor: '#e1e1e1',
+    borderRadius: 16,
+    padding: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  sendIconWrapper: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#e1e1e1',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2,
   },
 });
 
