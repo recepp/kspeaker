@@ -19,9 +19,9 @@ const ChatScreen: React.FC = () => {
   const [listening, setListening] = useState(false);
   const [ttsActive, setTtsActive] = useState(false);
   const [ttsStoppedManually, setTtsStoppedManually] = useState(false);
+  const [voiceModeActive, setVoiceModeActive] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isFirstSilenceRef = useRef(true);
   // Refs to keep latest values inside event handlers added once
   const listeningRef = useRef(listening);
   const ttsStoppedManuallyRef = useRef(ttsStoppedManually);
@@ -90,41 +90,45 @@ const ChatScreen: React.FC = () => {
       // Start new listening session
       setInput('');
       setListening(true);
+      setVoiceModeActive(true);
 
-      let lastText = ''; // Son gelen metni saklamak için
-      let isFirstSilence = true; // İlk sessizlik kontrolü için flag
+      const speechState = {
+        currentText: '',
+        hasReceivedInput: false
+      };
 
-      // Single timer for silence detection
       const startSilenceTimer = () => {
         if (silenceTimer.current) {
           clearTimeout(silenceTimer.current);
         }
+
+        const timeout = speechState.hasReceivedInput ? 2000 : 5000; // Input varsa 2sn, yoksa 5sn
+        
         silenceTimer.current = setTimeout(async () => {
           try {
-            const textToSend = lastText.trim();
-            const isFirstTime = isFirstSilenceRef.current;
+            const textToSend = speechState.currentText.trim();
             
             // Önce mikrofonun kapanması için gerekli işlemler
             stopListening();
             setListening(false);
             
-            // İlk sessizlik değilse ve metin varsa gönder
-            if (textToSend && !isFirstTime) {
+            // Eğer text varsa gönder
+            if (textToSend) {
               await handleSendByVoice(textToSend);
             }
             
-            // İlk sessizlik flag'ini güncelle
-            isFirstSilenceRef.current = false;
+            setVoiceModeActive(false);
           } catch (err) {
             console.error('Error in silence timer:', err);
           }
-        }, 5000); // 5 saniye sessizlik
+        }, timeout);
       };
 
       // Start listening with the new timer logic
       startListening((text) => {
         console.debug('[speech] recognition result:', text);
-        lastText = text; // Metni sakla
+        speechState.currentText = text;
+        speechState.hasReceivedInput = true;
         startSilenceTimer();
       });
 
@@ -185,7 +189,6 @@ const ChatScreen: React.FC = () => {
       // Hoparlör kapandığında mikrofonun 5 saniye dinlemesi için
       if (!listening) {
         handleMic(); // Mikrofonu aç
-        isFirstSilenceRef.current = true; // İlk sessizlik kontrolünü sıfırla
       }
 
     } catch (err) {
@@ -218,6 +221,7 @@ const ChatScreen: React.FC = () => {
       const handleTTSStart = () => {
         try {
           setTtsActive(true);
+          setVoiceModeActive(false);
           // If we were listening, stop it
           if (listeningRef.current) {
             stopListening();
@@ -249,37 +253,52 @@ const ChatScreen: React.FC = () => {
             // İnput'u temizle ve mikrofonu aç
             setInput('');
             setListening(true);
-            isFirstSilenceRef.current = true; // İlk sessizlik kontrolünü sıfırla
+            setVoiceModeActive(true);
 
-            let lastResultTime = Date.now();
-            let lastText = '';
+            const speechState = {
+              currentText: '',
+              hasReceivedInput: false
+            };
+
+            const startSilenceTimer = () => {
+              if (silenceTimer.current) {
+                clearTimeout(silenceTimer.current);
+              }
+
+              const timeout = speechState.hasReceivedInput ? 2000 : 5000;
+              
+              silenceTimer.current = setTimeout(async () => {
+                try {
+                  const textToSend = speechState.currentText.trim();
+                  
+                  stopListening();
+                  setListening(false);
+                  
+                  if (textToSend) {
+                    await handleSendByVoice(textToSend);
+                  }
+                  
+                  setVoiceModeActive(false);
+                } catch (err) {
+                  console.error('Error in silence timer:', err);
+                }
+              }, timeout);
+            };
 
             // Mikrofonu başlat
             startListening((text) => {
               try {
-                // Son metin ve zaman güncelleniyor
-                lastResultTime = Date.now();
-                lastText = text;
-
-                // Her yeni metin geldiğinde timer'ı yeniden başlat
-                if (silenceTimer.current) {
-                  clearTimeout(silenceTimer.current);
-                }
-
-                // 3 saniye sessizlik sonrası mesajı gönder
-                silenceTimer.current = setTimeout(() => {
-                  console.debug('[speech] silence timer fired, lastText:', lastText);
-                  // Eğer metin varsa gönder
-                  if (lastText.trim()) {
-                    stopListening();
-                    setListening(false);
-                    handleSendByVoice(lastText);
-                  }
-                }, 3000);
+                console.debug('[speech] recognition result:', text);
+                speechState.currentText = text;
+                speechState.hasReceivedInput = true;
+                startSilenceTimer();
               } catch (error) {
                 console.error('Error in speech recognition:', error);
               }
             });
+
+            // İlk timer'ı başlat
+            startSilenceTimer();
           }
         } catch (err) {
           console.error('Error in TTS finish handler:', err);
