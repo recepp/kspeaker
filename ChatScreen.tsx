@@ -1,6 +1,5 @@
-// ...existing code...
 import React, { useState, useRef } from 'react';
-import { View, Text, TextInput, Button, FlatList, StyleSheet, TouchableOpacity, Keyboard, Platform, Alert, KeyboardAvoidingView, Image } from 'react-native';
+import { SafeAreaView, View, Text, TextInput, Button, FlatList, StyleSheet, TouchableOpacity, Keyboard, Platform, Alert, KeyboardAvoidingView, Image } from 'react-native';
 import { sendChatMessage } from './api';
 import { startListening, stopListening } from './speech';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -10,61 +9,334 @@ import Tts from 'react-native-tts';
 interface Message {
   id: string;
   text: string;
+  sender: 'user' | 'bot';
 }
 
 const ChatScreen: React.FC = () => {
-  // TTS listeners and language setup
-  React.useEffect(() => {
-    Tts.setDefaultLanguage('en-US');
-    Tts.addEventListener('tts-start', () => {});
-    Tts.addEventListener('tts-finish', () => {});
-    Tts.addEventListener('tts-cancel', () => {});
-    return () => {
-      Tts.removeAllListeners('tts-start');
-      Tts.removeAllListeners('tts-finish');
-      Tts.removeAllListeners('tts-cancel');
-    };
-  }, []);
+  // State declarations
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
+  const [ttsActive, setTtsActive] = useState(false);
+  const [ttsStoppedManually, setTtsStoppedManually] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstSilenceRef = useRef(true);
+  // Refs to keep latest values inside event handlers added once
+  const listeningRef = useRef(listening);
+  const ttsStoppedManuallyRef = useRef(ttsStoppedManually);
+  const isSending = useRef(false);
 
-  const handleMic = () => {
-    try {
-      setInput(''); // Clear input box
-      if (!listening) {
-        setListening(true);
-        startListening((text) => {
-          setInput(text);
-          setListening(false);
-        });
-      } else {
-        stopListening();
-        setListening(false);
-      }
-    } catch (err) {
-      setListening(false);
-      Alert.alert('Microphone error', String(err));
-    }
-  };
-
+  // Handler functions
   const handleSend = async () => {
-    if (input.trim()) {
-      const userMsg = { id: Date.now().toString(), text: input, sender: 'user' };
+    if (input.trim() && !isSending.current) {
+      isSending.current = true;
+      const userMsg = { id: Date.now().toString(), text: input, sender: 'user' } as const;
       setMessages(prev => [...prev, userMsg]);
       setInput('');
       Keyboard.dismiss();
       try {
         const reply = await sendChatMessage(userMsg.text);
-        const botMsg = { id: (Date.now()+1).toString(), text: reply, sender: 'bot' };
+        const botMsg = { id: (Date.now()+1).toString(), text: reply, sender: 'bot' } as const;
         setMessages(prev => [...prev, botMsg]);
+        setTtsActive(true);
         Tts.speak(reply);
       } catch (e) {
-        setMessages(prev => [...prev, { id: (Date.now()+2).toString(), text: 'API error', sender: 'bot' }]);
+        setMessages(prev => [...prev, { id: (Date.now()+2).toString(), text: 'API error', sender: 'bot' } as const]);
+      } finally {
+        isSending.current = false;
       }
     }
   };
+
+  const handleSendByVoice = async (voiceText: string) => {
+    if (!isSending.current) {
+      isSending.current = true;
+      // Hemen input'u temizle
+      setInput('');
+      
+      const userMsg = { id: Date.now().toString(), text: voiceText, sender: 'user' } as const;
+      setMessages(prev => [...prev, userMsg]);
+      Keyboard.dismiss();
+      try {
+        const reply = await sendChatMessage(voiceText);
+        const botMsg = { id: (Date.now()+1).toString(), text: reply, sender: 'bot' } as const;
+        setMessages(prev => [...prev, botMsg]);
+        setTtsActive(true);
+        Tts.speak(reply);
+      } catch (e) {
+        setMessages(prev => [...prev, { id: (Date.now()+2).toString(), text: 'API error', sender: 'bot' } as const]);
+      } finally {
+        isSending.current = false;
+      }
+    }
+  };
+
+  const handleMic = () => {
+    try {
+      if (ttsActive) return; // Don't open mic during TTS
+      
+      // If already listening, stop it
+      if (listening) {
+        stopListening();
+        setListening(false);
+        if (silenceTimer.current) {
+          clearTimeout(silenceTimer.current);
+          silenceTimer.current = null;
+        }
+        return;
+      }
+
+      // Start new listening session
+      setInput('');
+      setListening(true);
+
+      let lastText = ''; // Son gelen metni saklamak için
+      let isFirstSilence = true; // İlk sessizlik kontrolü için flag
+
+      // Single timer for silence detection
+      const startSilenceTimer = () => {
+        if (silenceTimer.current) {
+          clearTimeout(silenceTimer.current);
+        }
+        silenceTimer.current = setTimeout(async () => {
+          try {
+            const textToSend = lastText.trim();
+            const isFirstTime = isFirstSilenceRef.current;
+            
+            // Önce mikrofonun kapanması için gerekli işlemler
+            stopListening();
+            setListening(false);
+            
+            // İlk sessizlik değilse ve metin varsa gönder
+            if (textToSend && !isFirstTime) {
+              await handleSendByVoice(textToSend);
+            }
+            
+            // İlk sessizlik flag'ini güncelle
+            isFirstSilenceRef.current = false;
+          } catch (err) {
+            console.error('Error in silence timer:', err);
+          }
+        }, 5000); // 5 saniye sessizlik
+      };
+
+      // Start listening with the new timer logic
+      startListening((text) => {
+        console.debug('[speech] recognition result:', text);
+        lastText = text; // Metni sakla
+        startSilenceTimer();
+      });
+
+      // Initial silence timer
+      startSilenceTimer();
+
+    } catch (err) {
+      setListening(false);
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+        silenceTimer.current = null;
+      }
+      Alert.alert('Microphone error', String(err));
+    }
+  };
+
+  const handleStopTTS = async () => {
+    try {
+      // Clear any existing timers
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+        silenceTimer.current = null;
+      }
+
+      // Stop TTS if active
+      if (ttsActive) {
+        await new Promise<void>((resolve) => {
+          // First try to stop without parameters
+          Promise.all([
+            Tts.setDefaultRate(1.0),
+            Tts.setDefaultPitch(1.0),
+            Tts.setDefaultLanguage('en-US')
+          ]).then(() => {
+            return Tts.stop();
+          }).then(() => {
+            resolve();
+          }).catch((err: unknown) => {
+            console.error('Error stopping TTS:', err);
+            resolve(); // Still resolve to continue cleanup
+          });
+        });
+      }
+      
+      // Stop microphone if active
+      if (listening) {
+        await new Promise<void>((resolve) => {
+          stopListening();
+          resolve();
+        });
+      }
+
+      // Reset all states to initial values
+      setTtsActive(false);
+      setTtsStoppedManually(true);
+      setListening(false);
+      setInput('');
+      
+      // Hoparlör kapandığında mikrofonun 5 saniye dinlemesi için
+      if (!listening) {
+        handleMic(); // Mikrofonu aç
+        isFirstSilenceRef.current = true; // İlk sessizlik kontrolünü sıfırla
+      }
+
+    } catch (err) {
+      console.error('Error in handleStopTTS:', err);
+      Alert.alert('Error', 'Failed to stop. Please try again.');
+    }
+  };
+
+  // Effects
+  // Cleanup timer when component unmounts or dependencies change
+  React.useEffect(() => {
+    return () => {
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+        silenceTimer.current = null;
+      }
+    };
+  }, []);
+
+  // keep refs in sync with state so event handlers (registered once) see latest values
+  React.useEffect(() => { listeningRef.current = listening; }, [listening]);
+  React.useEffect(() => { ttsStoppedManuallyRef.current = ttsStoppedManually; }, [ttsStoppedManually]);
+
+  // TTS setup effect
+  React.useEffect(() => {
+    try {
+      Tts.setDefaultLanguage('en-US');
+
+      // Handlers are defined once and use refs to read latest state
+      const handleTTSStart = () => {
+        try {
+          setTtsActive(true);
+          // If we were listening, stop it
+          if (listeningRef.current) {
+            stopListening();
+            setListening(false);
+          }
+          // Clear any existing timer when TTS starts
+          if (silenceTimer.current) {
+            clearTimeout(silenceTimer.current);
+            silenceTimer.current = null;
+          }
+          setTtsStoppedManually(false); // TTS başladığında manual stop'u sıfırla
+        } catch (err) {
+          console.error('Error in TTS start handler:', err);
+        }
+      };
+
+      const handleTTSFinish = async () => {
+        try {
+          setTtsActive(false);
+
+          // TTS bittiyse ve manuel durdurulmadıysa mikrofonu aç
+          if (!ttsStoppedManuallyRef.current) {
+            // Temiz başlangıç için timer'ı sıfırla
+            if (silenceTimer.current) {
+              clearTimeout(silenceTimer.current);
+              silenceTimer.current = null;
+            }
+
+            // İnput'u temizle ve mikrofonu aç
+            setInput('');
+            setListening(true);
+            isFirstSilenceRef.current = true; // İlk sessizlik kontrolünü sıfırla
+
+            let lastResultTime = Date.now();
+            let lastText = '';
+
+            // Mikrofonu başlat
+            startListening((text) => {
+              try {
+                // Son metin ve zaman güncelleniyor
+                lastResultTime = Date.now();
+                lastText = text;
+
+                // Her yeni metin geldiğinde timer'ı yeniden başlat
+                if (silenceTimer.current) {
+                  clearTimeout(silenceTimer.current);
+                }
+
+                // 3 saniye sessizlik sonrası mesajı gönder
+                silenceTimer.current = setTimeout(() => {
+                  console.debug('[speech] silence timer fired, lastText:', lastText);
+                  // Eğer metin varsa gönder
+                  if (lastText.trim()) {
+                    stopListening();
+                    setListening(false);
+                    handleSendByVoice(lastText);
+                  }
+                }, 3000);
+              } catch (error) {
+                console.error('Error in speech recognition:', error);
+              }
+            });
+          }
+        } catch (err) {
+          console.error('Error in TTS finish handler:', err);
+          // Hata durumunda temizlik yap
+          if (silenceTimer.current) {
+            clearTimeout(silenceTimer.current);
+            silenceTimer.current = null;
+          }
+          setTtsActive(false);
+          setListening(false);
+        }
+      };
+
+      const handleTTSCancel = () => {
+        try {
+          setTtsActive(false);
+          // Clear any timers on cancel
+          if (silenceTimer.current) {
+            clearTimeout(silenceTimer.current);
+            silenceTimer.current = null;
+          }
+        } catch (err) {
+          console.error('Error in TTS cancel handler:', err);
+        }
+      };
+
+      // Add event listeners once
+      Tts.addEventListener('tts-start', handleTTSStart);
+      Tts.addEventListener('tts-finish', handleTTSFinish);
+      Tts.addEventListener('tts-cancel', handleTTSCancel);
+
+      // Cleanup function
+      return () => {
+        try {
+          // Remove the exact handlers we added
+          Tts.removeEventListener('tts-start', handleTTSStart as any);
+          Tts.removeEventListener('tts-finish', handleTTSFinish as any);
+          Tts.removeEventListener('tts-cancel', handleTTSCancel as any);
+          // Clear any remaining timers
+          if (silenceTimer.current) {
+            clearTimeout(silenceTimer.current);
+            silenceTimer.current = null;
+          }
+        } catch (err) {
+          console.error('Error cleaning up TTS listeners:', err);
+        }
+      };
+    } catch (err) {
+      console.error('Error setting up TTS:', err);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!ttsActive && ttsStoppedManually) {
+      setTtsStoppedManually(false);
+    }
+  }, [ttsActive, ttsStoppedManually]);
 
   React.useEffect(() => {
     if (flatListRef.current) {
@@ -72,16 +344,17 @@ const ChatScreen: React.FC = () => {
     }
   }, [messages]);
 
+  // JSX
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-    >
-      <View style={styles.logoContainer}>
-        {/* Replace with your logo image if available */}
-        <Text style={styles.logoText}>kspeaker</Text>
-      </View>
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+      >
+        <View style={styles.logoContainer}>
+          <Text style={styles.logoText}>kspeaker</Text>
+        </View>
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -103,13 +376,19 @@ const ChatScreen: React.FC = () => {
           onSubmitEditing={handleSend}
           returnKeyType="send"
         />
-        <TouchableOpacity onPress={handleMic} style={styles.micButton}>
-          {listening ? (
-            <MaterialCommunityIcons name="microphone-settings" size={32} color="#007AFF" />
-          ) : (
-            <MaterialCommunityIcons name="microphone" size={32} color="#555" />
-          )}
-        </TouchableOpacity>
+        {ttsActive ? (
+          <TouchableOpacity onPress={handleStopTTS} style={styles.micButton}>
+            <MaterialCommunityIcons name="stop" size={32} color="#d32f2f" />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity onPress={handleMic} style={styles.micButton}>
+            {listening ? (
+              <MaterialCommunityIcons name="microphone" size={32} color="#007AFF" />
+            ) : (
+              <MaterialCommunityIcons name="microphone" size={32} color="#555" />
+            )}
+          </TouchableOpacity>
+        )}
         <TouchableOpacity onPress={handleSend} style={styles.sendButton}>
           <View style={styles.sendIconWrapper}>
             <Ionicons name="arrow-up" size={32} color="#fff" />
@@ -117,6 +396,7 @@ const ChatScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
@@ -126,18 +406,19 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: '#fff',
   },
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
   logoContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
+    width: '100%',
     alignItems: 'center',
     backgroundColor: '#fff',
-    paddingTop: 24,
+    paddingTop: 4,
     paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+    marginTop: -8,
   },
   logoText: {
     fontSize: 24,
@@ -148,8 +429,9 @@ const styles = StyleSheet.create({
   messages: {
     flex: 1,
     marginBottom: 8,
-    marginTop: 64,
+    marginTop: 8,
     paddingBottom: 32,
+    paddingTop: 8,
   },
   messageBubble: {
     padding: 10,
