@@ -1,7 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, Button, FlatList, StyleSheet, TouchableOpacity, Keyboard, Platform, Alert, KeyboardAvoidingView, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { sendChatMessage } from './api';
+import { sendChatMessage, initializeApi, registerUser } from './api';
+import { checkRegistration, saveRegistration } from './registration';
+import { EmailRegistrationModal } from './components/EmailRegistrationModal';
 import { startListening, stopListening } from './speech';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -21,6 +23,7 @@ const ChatScreen: React.FC = () => {
   const [ttsActive, setTtsActive] = useState(false);
   const [ttsStoppedManually, setTtsStoppedManually] = useState(false);
   const [voiceModeActive, setVoiceModeActive] = useState(false);
+  const [showEmailModal, setShowEmailModal] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Refs to keep latest values inside event handlers added once
@@ -199,9 +202,40 @@ const ChatScreen: React.FC = () => {
     }
   };
 
+  // Handle email registration
+  const handleEmailSubmit = async (email: string) => {
+    try {
+      const success = await registerUser(email);
+      if (success) {
+        await saveRegistration(email);
+        setShowEmailModal(false);
+      }
+      return success;
+    } catch (error) {
+      console.error('Error during registration:', error);
+      return false;
+    }
+  };
+
   // Effects
-  // Cleanup timer when component unmounts or dependencies change
+  // Initialize API, check registration and cleanup timer when component mounts
   React.useEffect(() => {
+    const initialize = async () => {
+      try {
+        await initializeApi();
+        
+        // Check if user is registered
+        const registration = await checkRegistration();
+        if (!registration) {
+          setShowEmailModal(true);
+        }
+      } catch (err) {
+        console.error('Error during initialization:', err);
+      }
+    };
+
+    initialize();
+
     return () => {
       if (silenceTimer.current) {
         clearTimeout(silenceTimer.current);
@@ -368,6 +402,10 @@ const ChatScreen: React.FC = () => {
   // JSX
   return (
     <SafeAreaView style={styles.safeArea}>
+      <EmailRegistrationModal 
+        visible={showEmailModal}
+        onSubmit={handleEmailSubmit}
+      />
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
