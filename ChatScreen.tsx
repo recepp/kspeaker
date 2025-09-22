@@ -41,11 +41,8 @@ const ChatScreen: React.FC = () => {
         const botMsg = { id: (Date.now()+1).toString(), text: reply, sender: 'bot' } as const;
         setMessages(prev => [...prev, botMsg]);
         
-        // Sadece voice mode aktifse TTS'i çalıştır
-        if (voiceModeActive) {
-          setTtsActive(true);
-          Tts.speak(reply);
-        }
+        // Text input ile gönderimde voice mode'u kapat
+        setVoiceModeActive(false);
       } catch (e) {
         setMessages(prev => [...prev, { id: (Date.now()+2).toString(), text: 'API error', sender: 'bot' } as const]);
       } finally {
