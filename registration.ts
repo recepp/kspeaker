@@ -30,3 +30,14 @@ export const saveRegistration = async (email: string): Promise<boolean> => {
     return false;
   }
 };
+
+export const clearRegistration = async (): Promise<boolean> => {
+  try {
+    await AsyncStorage.removeItem(REGISTRATION_KEY);
+    console.log('[TEST] Registration cleared');
+    return true;
+  } catch (error) {
+    console.error('Error clearing registration:', error);
+    return false;
+  }
+};

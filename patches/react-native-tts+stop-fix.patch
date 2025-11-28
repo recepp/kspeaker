@@ -1,0 +1,24 @@
+--- a/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
++++ b/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
+@@ -100,7 +100,7 @@
+     [self.synthesizer speakUtterance:utterance];
+     resolve([NSNumber numberWithUnsignedLong:utterance.hash]);
+ }
+ 
+-RCT_EXPORT_METHOD(stop:(BOOL *)onWordBoundary resolve:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPromiseRejectBlock)reject)
++RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPromiseRejectBlock)reject)
+ {
+-    AVSpeechBoundary boundary;
+-
+-    if(onWordBoundary != NULL && onWordBoundary) {
+-        boundary = AVSpeechBoundaryWord;
+-    } else {
+-        boundary = AVSpeechBoundaryImmediate;
+-    }
+-
+-    BOOL stopped = [self.synthesizer stopSpeakingAtBoundary:boundary];
++    // Always use immediate boundary for instant stop
++    BOOL stopped = [self.synthesizer stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+ 
+     resolve([NSNumber numberWithBool:stopped]);
+ }

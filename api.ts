@@ -36,6 +36,7 @@ const getHeaders = () => {
     'X-Platform': apiState.platform,
     'X-Platform-Version': apiState.systemVersion,
     'X-App-Version': `${apiState.appVersion}+${apiState.buildNumber}`,
+    'X-Api-Key': `kspeaker_secure_api_key_1`,
   };
   
   if (apiState.deviceId) {
