@@ -21,7 +21,7 @@ interface ChatMessage {
 }
 
 const ChatScreen: React.FC = () => {
-  console.log('[ChatScreen] LOADED v2025-11-25-VOICE-FIX');
+  // Removed debug log - too verbose
   
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -96,12 +96,15 @@ const ChatScreen: React.FC = () => {
   const shimmerAnim = useRef(new Animated.Value(0)).current;
   const micPulseAnim = useRef(new Animated.Value(1)).current;
 
-  console.log('[ChatScreen] Current state - messages:', messages.length, 'listening:', listening, 'speaking:', speaking, 'conversation:', conversationMode);
+  // Removed verbose state logging - only log on specific actions
 
   // Sync refs with state
   useEffect(() => {
     conversationModeRef.current = conversationMode;
-    console.log('[Conversation] Ref synced:', conversationMode);
+    // Only log when conversation mode changes
+    if (conversationMode) {
+      console.log('[Conversation] Mode enabled');
+    }
   }, [conversationMode]);
 
   useEffect(() => {
