@@ -92,11 +92,13 @@ export async function sendChatMessage(text: string, conversationMode?: string): 
   });
   
   const data = await response.json();
+  console.log('[API] Response data:', data); // DEBUG: See what backend returns
   
-  // Check if response is empty or null, throw special error
+  // Check if response is empty or null, throw special error with backend message
   const reply = data.response || data.reply;
   if (!reply || reply.trim() === '') {
-    throw new Error('WAITING_APPROVAL');
+    const errorMessage = data.message || data.error || 'QUOTA_EXCEEDED';
+    throw new Error(errorMessage);
   }
   
   return reply;

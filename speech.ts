@@ -15,7 +15,7 @@ export function startListening(onResult: (text: string) => void, onError?: () =>
   };
   
   Voice.onSpeechError = (event) => {
-    console.error('[Voice] Speech error:', event);
+    console.log('[Voice] Speech error:', event); // Changed from console.error - don't show red error to user
     
     // Call error callback to reset state
     if (errorCallback) {
@@ -30,7 +30,7 @@ export function startListening(onResult: (text: string) => void, onError?: () =>
   };
   
   Voice.start('en-US').catch((error) => {
-    console.error('[Voice] Failed to start:', error);
+    console.log('[Voice] Failed to start:', error); // Changed from console.error
     
     // Call error callback on startup failure too
     if (errorCallback) {
@@ -42,6 +42,6 @@ export function startListening(onResult: (text: string) => void, onError?: () =>
 
 export function stopListening() {
   Voice.stop().catch((error) => {
-    console.error('[Voice] Failed to stop:', error);
+    console.log('[Voice] Failed to stop:', error); // Changed from console.error
   });
 }

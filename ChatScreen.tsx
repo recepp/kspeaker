@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { sendChatMessage, initializeApi, registerUser } from './api';
@@ -68,6 +68,7 @@ const ChatScreen: React.FC = () => {
   const [showAboutModal, setShowAboutModal] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string>(''); // Backend error message
   const [selectedLanguage, setSelectedLanguage] = useState<'en' | 'tr' | 'ar' | 'ru'>('en');
   const [quizMode, setQuizMode] = useState(false);
   const [quizLevel, setQuizLevel] = useState<string | null>(null);
@@ -340,19 +341,13 @@ const ChatScreen: React.FC = () => {
         console.log('[TTS] 🔊 Tts.speak() called - waiting for events...');
       }, 200);
     } catch (e: any) {
-      // Check if error is waiting for approval
-      if (e?.message === 'WAITING_APPROVAL') {
-        setShowApprovalModal(true);
-        // Remove the user message since it won't get a response
-        setMessages(prev => prev.slice(0, -1));
-      } else {
-        const errorMsg: ChatMessage = {
-          id: (Date.now() + 2).toString(),
-          role: 'assistant',
-          content: 'Sorry, error occurred.',
-        };
-        setMessages(prev => [...prev, errorMsg]);
-      }
+      console.log('[Send] ⚠️ Request error:', e.message || e); // Log error without showing red error
+      
+      // Show error modal with backend message
+      setErrorMessage(e?.message || 'An error occurred');
+      setShowApprovalModal(true);
+      // Remove the user message since it won't get a response
+      setMessages(prev => prev.slice(0, -1));
     } finally {
       setIsLoadingResponse(false);
       isSending.current = false;
@@ -432,20 +427,13 @@ const ChatScreen: React.FC = () => {
         console.log('[TTS] 🔊 Tts.speak() called - waiting for events...');
       }, 200);
     } catch (e: any) {
-      console.error('[Voice] Error:', e);
+      console.log('[Voice] ⚠️ Request error:', e.message || e); // Changed from console.error
       
-      // Check if error is waiting for approval
-      if (e?.message === 'WAITING_APPROVAL') {
-        setShowApprovalModal(true);
-        // Remove the user message since it won't get a response
-        setMessages(prev => prev.slice(0, -1));
-      } else {
-        setMessages(prev => [...prev, {
-          id: (Date.now() + 2).toString(),
-          role: 'assistant',
-          content: 'Sorry, error occurred.',
-        }]);
-      }
+      // Show error modal with backend message
+      setErrorMessage(e?.message || 'An error occurred');
+      setShowApprovalModal(true);
+      // Remove the user message since it won't get a response
+      setMessages(prev => prev.slice(0, -1));
     } finally {
       setIsLoadingResponse(false);
       isSending.current = false;
@@ -486,8 +474,6 @@ const ChatScreen: React.FC = () => {
     setInput('');
     setSpeaking(false);
     setListening(false);
-    Tts.stop();
-    stopListening();
     console.log('[Chat] ✅ All messages cleared');
   };
 
@@ -572,8 +558,8 @@ const ChatScreen: React.FC = () => {
       askAnything: { en: 'Ask me anything or use the microphone', tr: 'Bana bir şey sor veya mikrofonu kullan', ar: 'اسألني أي شيء أو استخدم الميكروفون', ru: 'Спросите меня о чем угодно или используйте микрофон' },
       selectLanguage: { en: 'Select Language', tr: 'Dil Seçin', ar: 'اختر اللغة', ru: 'Выберите язык' },
       englishQuiz: { en: 'English Quiz', tr: 'İngilizce Quiz', ar: 'اختبار الإنجليزية', ru: 'Английский квиз' },
-      waitingApproval: { en: 'Waiting for Approval', tr: 'Onay Bekleniyor', ar: 'في انتظار الموافقة', ru: 'Ожидание одобрения' },
-      approvalMessage: { en: 'Your account is pending admin approval. You will be able to use KSpeaker after approval.', tr: 'Hesabınız yönetici onayı bekliyor. Onay sonrasında KSpeaker\'ı kullanabileceksiniz.', ar: 'حسابك في انتظار موافقة المسؤول. ستتمكن من استخدام KSpeaker بعد الموافقة.', ru: 'Ваша учетная запись ожидает одобрения администратором. Вы сможете использовать KSpeaker после одобрения.' },
+      waitingApproval: { en: 'Daily Quota Reached', tr: 'Günlük Kota Doldu', ar: 'تم الوصول إلى الحد اليومي', ru: 'Достигнут дневной лимит' },
+      approvalMessage: { en: 'You have reached your daily usage limit. Please try again tomorrow or contact support for more quota.', tr: 'Günlük kullanım limitinize ulaştınız. Lütfen yarın tekrar deneyin veya daha fazla kota için destek ile iletişime geçin.', ar: 'لقد وصلت إلى حد الاستخدام اليومي. يرجى المحاولة مرة أخرى غدًا أو الاتصال بالدعم للحصول على المزيد من الحصة.', ru: 'Вы достигли дневного лимита использования. Попробуйте снова завтра или свяжитесь со службой поддержки для увеличения квоты.' },
       understood: { en: 'Understood', tr: 'Anladım', ar: 'مفهوم', ru: 'Понятно' },
     };
     return translations[key]?.[selectedLanguage] || translations[key]?.en || key;
@@ -662,35 +648,19 @@ const ChatScreen: React.FC = () => {
         silenceTimer.current = null;
       }
       
-      // Reset state but keep conversation mode active
+      // Reset state and STOP conversation mode (don't retry automatically)
       setListening(false);
+      setConversationMode(false);
+      conversationModeRef.current = false;
       
-      // Stop retrying after 3 consecutive errors (likely Simulator or no mic)
-      if (voiceErrorCount.current >= 3) {
-        console.log('[Voice] ⛔ Too many errors, stopping conversation mode');
-        console.log('[Voice] 💡 Tip: Voice recognition may not work in iOS Simulator');
-        setConversationMode(false);
-        conversationModeRef.current = false;
-        return;
-      }
-      
-      // Restart listening after 2 seconds if conversation mode still active
-      if (conversationModeRef.current) {
-        console.log('[Voice] 🔄 Will retry listening in 2 seconds...');
-        setTimeout(() => {
-          if (conversationModeRef.current && !speakingRef.current && !listening) {
-            console.log('[Voice] 🎤 Retrying voice input...');
-            startVoiceInput();
-          }
-        }, 2000);
-      }
+      console.log('[Voice] � Stopped due to error - Press mic button to restart');
     });
 
     setTimer();
   };
 
   // Microphone button handler - Simplified conversation toggle
-  const handleMic = () => {
+  const handleMic = useCallback(() => {
     console.log('[Mic] 🎤 Pressed - speaking:', speaking, 'listening:', listening, 'conversation:', conversationMode);
     triggerHaptic('light'); // Haptic feedback hemen
     
@@ -723,7 +693,7 @@ const ChatScreen: React.FC = () => {
     conversationModeRef.current = true;
     voiceErrorCount.current = 0; // Reset error count when manually starting
     startVoiceInput();
-  };
+  }, [speaking, listening, conversationMode]);
 
   // Long press removed - simple tap toggle is enough
 
@@ -926,13 +896,11 @@ const ChatScreen: React.FC = () => {
     );
   };
 
-  const renderMessage = ({ item }: { item: ChatMessage }) => {
+  const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {
     const isUser = item.role === 'user';
     const isTyping = typingMessageId === item.id;
     const textToShow = isTyping ? displayedText : item.content;
     const showMenu = messageContextMenu === item.id;
-    
-    console.log('[Render] Message:', item.role, item.content.substring(0, 30));
     
     return (
       <TouchableOpacity
@@ -976,15 +944,15 @@ const ChatScreen: React.FC = () => {
         </Animated.View>
       </TouchableOpacity>
     );
-  };
+  }, [typingMessageId, displayedText, messageContextMenu, theme, isTablet]);
 
-  const renderEmpty = () => (
+  const renderEmpty = useCallback(() => (
     <View style={styles.empty}>
       <Ionicons name="chatbubbles-outline" size={64} color={theme === 'dark' ? 'rgba(125, 211, 192, 0.3)' : 'rgba(74, 111, 165, 0.3)'} />
       <Text style={[styles.emptyText, theme === 'light' && styles.emptyTextLight]}>{getTranslation('startConversation')}</Text>
       <Text style={[styles.emptySubtext, theme === 'light' && styles.emptySubtextLight]}>{getTranslation('askAnything')}</Text>
     </View>
-  );
+  ), [theme]);
 
   return (
     <SafeAreaView style={[styles.container, theme === 'light' && styles.containerLight]} edges={['top', 'bottom']}>
@@ -1096,20 +1064,20 @@ const ChatScreen: React.FC = () => {
           <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
             <View style={styles.approvalIconContainer}>
               <Ionicons 
-                name="time-outline" 
+                name="alert-circle-outline" 
                 size={64} 
-                color={theme === 'dark' ? '#7DD3C0' : '#4A6FA5'} 
+                color={theme === 'dark' ? '#F59E0B' : '#EF4444'} 
               />
             </View>
-            <Text style={[styles.approvalTitle, theme === 'light' && styles.approvalTitleLight]}>
-              {getTranslation('waitingApproval')}
-            </Text>
             <Text style={[styles.approvalMessage, theme === 'light' && styles.approvalMessageLight]}>
-              {getTranslation('approvalMessage')}
+              {errorMessage || getTranslation('approvalMessage')}
             </Text>
             <TouchableOpacity 
               style={[styles.approvalButton, theme === 'light' && styles.approvalButtonLight]}
-              onPress={() => setShowApprovalModal(false)}
+              onPress={() => {
+                setShowApprovalModal(false);
+                setErrorMessage(''); // Clear error message
+              }}
             >
               <Text style={styles.approvalButtonText}>{getTranslation('understood')}</Text>
             </TouchableOpacity>
@@ -1189,6 +1157,11 @@ const ChatScreen: React.FC = () => {
           ListEmptyComponent={renderEmpty}
           ListFooterComponent={isLoadingResponse ? renderSkeletonLoader : null}
           keyboardShouldPersistTaps="handled"
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={10}
+          updateCellsBatchingPeriod={50}
+          windowSize={10}
+          initialNumToRender={10}
         />
       </LinearGradient>
 
