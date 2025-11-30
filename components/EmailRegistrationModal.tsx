@@ -7,6 +7,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  useColorScheme,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -20,6 +23,9 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isFocused, setIsFocused] = useState(false);
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === 'dark';
 
   const handleSubmit = async () => {
     // Basic email validation
@@ -49,67 +55,133 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
       transparent
       animationType="fade"
     >
-      <View style={styles.modalContainer}>
-        <LinearGradient
-          colors={['#212121', '#2F2F2F']}
-          style={styles.modalContent}
-        >
-          {/* Logo/Icon Section */}
-          <View style={styles.iconCircle}>
-            <Ionicons name="mail-outline" size={48} color="#7DD3C0" />
-          </View>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <View style={styles.modalContainer}>
+          <View style={[
+            styles.modalContent,
+            isDark ? styles.modalContentDark : styles.modalContentLight
+          ]}>
+            {/* Close/Dismiss area visual indicator */}
+            <View style={styles.dragIndicator} />
 
-          {/* Title Section */}
-          <Text style={styles.title}>Welcome to KSpeaker!</Text>
-          <Text style={styles.subtitle}>
-            Enter your email to start your AI-powered English practice journey
-          </Text>
-          
-          {/* Email Input */}
-          <View style={styles.inputContainer}>
-            <Ionicons name="mail" size={20} color="#7DD3C0" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="your.email@example.com"
-              placeholderTextColor="rgba(255, 255, 255, 0.4)"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!isLoading}
-            />
-          </View>
-
-          {error ? (
-            <View style={styles.errorContainer}>
-              <Ionicons name="alert-circle" size={16} color="#EF4444" />
-              <Text style={styles.errorText}>{error}</Text>
+            {/* Logo/Icon Section */}
+            <View style={[
+              styles.iconCircle,
+              isDark ? styles.iconCircleDark : styles.iconCircleLight
+            ]}>
+              <LinearGradient
+                colors={isDark ? ['#7DD3C0', '#5EBAAA'] : ['#4A6FA5', '#3A5A8A']}
+                style={styles.iconGradient}
+              >
+                <Ionicons 
+                  name="mail-outline" 
+                  size={38} 
+                  color="#FFFFFF" 
+                />
+              </LinearGradient>
             </View>
-          ) : null}
 
-          {/* Continue Button */}
-          <TouchableOpacity 
-            style={[styles.button, isLoading && styles.buttonDisabled]}
-            onPress={handleSubmit}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#212121" />
-            ) : (
-              <>
-                <Text style={styles.buttonText}>Continue</Text>
-                <Ionicons name="arrow-forward" size={20} color="#212121" />
-              </>
-            )}
-          </TouchableOpacity>
+            {/* Title Section */}
+            <Text style={[
+              styles.title,
+              isDark ? styles.titleDark : styles.titleLight
+            ]}>
+              Welcome to KSpeaker! 👋
+            </Text>
+            <Text style={[
+              styles.subtitle,
+              isDark ? styles.subtitleDark : styles.subtitleLight
+            ]}>
+              Let's start your English learning journey
+            </Text>
+            
+            {/* Email Input with Send Button */}
+            <View style={[
+              styles.inputContainer,
+              isDark ? styles.inputContainerDark : styles.inputContainerLight,
+              isFocused && (isDark ? styles.inputContainerFocusedDark : styles.inputContainerFocusedLight),
+              error && styles.inputContainerError
+            ]}>
+              <Ionicons 
+                name="mail" 
+                size={20} 
+                color={isFocused ? (isDark ? '#7DD3C0' : '#4A6FA5') : (isDark ? '#888' : '#999')}
+                style={styles.inputIcon} 
+              />
+              <TextInput
+                style={[
+                  styles.input,
+                  isDark ? styles.inputDark : styles.inputLight
+                ]}
+                placeholder="your.email@example.com"
+                placeholderTextColor={isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                value={email}
+                onChangeText={(text) => {
+                  setEmail(text);
+                  setError('');
+                }}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isLoading}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+              />
+              
+              {/* Send Button */}
+              <TouchableOpacity 
+                onPress={handleSubmit}
+                disabled={isLoading || !email}
+                style={styles.sendButton}
+                activeOpacity={0.7}
+              >
+                {isLoading ? (
+                  <ActivityIndicator 
+                    color={isDark ? '#7DD3C0' : '#4A6FA5'} 
+                    size="small" 
+                  />
+                ) : (
+                  <LinearGradient
+                    colors={isDark ? ['#7DD3C0', '#5EBAAA'] : ['#4A6FA5', '#3A5A8A']}
+                    style={styles.sendButtonGradient}
+                  >
+                    <Ionicons 
+                      name="send" 
+                      size={20} 
+                      color="#FFFFFF" 
+                    />
+                  </LinearGradient>
+                )}
+              </TouchableOpacity>
+            </View>
 
-          {/* Info Text */}
-          <Text style={styles.infoText}>
-            We'll use your email to personalize your learning experience
-          </Text>
-        </LinearGradient>
-      </View>
+            {error ? (
+              <View style={[
+                styles.errorContainer,
+                isDark ? styles.errorContainerDark : styles.errorContainerLight
+              ]}>
+                <Ionicons name="alert-circle" size={16} color="#EF4444" />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
+
+            {/* Info Text */}
+            <View style={styles.infoContainer}>
+              <Ionicons 
+                name="shield-checkmark-outline" 
+                size={13} 
+                color={isDark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(0, 0, 0, 0.45)'} 
+              />
+              <Text style={[
+                styles.infoText,
+                isDark ? styles.infoTextDark : styles.infoTextLight
+              ]}>
+                Your email is safe and will never be shared
+              </Text>
+            </View>
+          </View>
+        </View>
+      </TouchableWithoutFeedback>
     </Modal>
   );
 };
@@ -117,115 +189,183 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
 const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    paddingHorizontal: 24,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
   },
   modalContent: {
-    borderRadius: 24,
-    paddingVertical: 40,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    paddingTop: 8,
+    paddingBottom: 60,
     paddingHorizontal: 24,
-    alignSelf: 'stretch',
-    maxWidth: 360,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.3,
     shadowRadius: 16,
-    elevation: 10,
+    elevation: 12,
+  },
+  modalContentDark: {
+    backgroundColor: '#1F1F1F',
+  },
+  modalContentLight: {
+    backgroundColor: '#FFFFFF',
+  },
+  dragIndicator: {
+    width: 40,
+    height: 4,
+    backgroundColor: 'rgba(128, 128, 128, 0.3)',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 24,
   },
   iconCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: 'rgba(125, 211, 192, 0.15)',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(125, 211, 192, 0.3)',
-    marginBottom: 24,
+    marginBottom: 20,
     alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  iconCircleDark: {
+    backgroundColor: 'rgba(125, 211, 192, 0.1)',
+  },
+  iconCircleLight: {
+    backgroundColor: 'rgba(74, 111, 165, 0.1)',
+  },
+  iconGradient: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   title: {
     fontSize: 26,
     fontWeight: '900',
-    color: '#ECECEC',
-    marginBottom: 12,
+    marginBottom: 6,
     textAlign: 'center',
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
+  },
+  titleDark: {
+    color: '#FFFFFF',
+  },
+  titleLight: {
+    color: '#1F1F1F',
   },
   subtitle: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.7)',
-    marginBottom: 28,
+    marginBottom: 24,
     textAlign: 'center',
     lineHeight: 20,
+    fontWeight: '500',
+  },
+  subtitleDark: {
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  subtitleLight: {
+    color: 'rgba(0, 0, 0, 0.6)',
   },
   inputContainer: {
-    alignSelf: 'stretch',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1A1A1A',
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#404040',
+    borderWidth: 2,
     paddingHorizontal: 16,
-    marginBottom: 16,
+    marginBottom: 8,
+    height: 56,
+  },
+  inputContainerDark: {
+    backgroundColor: '#2A2A2A',
+    borderColor: '#3A3A3A',
+  },
+  inputContainerLight: {
+    backgroundColor: '#F5F5F5',
+    borderColor: '#E0E0E0',
+  },
+  inputContainerFocusedDark: {
+    borderColor: '#7DD3C0',
+    backgroundColor: '#252525',
+  },
+  inputContainerFocusedLight: {
+    borderColor: '#4A6FA5',
+    backgroundColor: '#FAFAFA',
+  },
+  inputContainerError: {
+    borderColor: '#EF4444',
   },
   inputIcon: {
-    marginRight: 10,
+    marginRight: 12,
   },
   input: {
     flex: 1,
-    paddingVertical: 14,
-    fontSize: 15,
-    color: '#ECECEC',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  inputDark: {
+    color: '#FFFFFF',
+  },
+  inputLight: {
+    color: '#1F1F1F',
   },
   errorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+  },
+  errorContainerDark: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+  },
+  errorContainerLight: {
     backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 16,
-    alignSelf: 'stretch',
   },
   errorText: {
     color: '#EF4444',
     fontSize: 13,
     marginLeft: 8,
     flex: 1,
+    fontWeight: '600',
   },
-  button: {
-    backgroundColor: '#7DD3C0',
-    paddingVertical: 15,
-    paddingHorizontal: 32,
-    borderRadius: 14,
-    alignSelf: 'stretch',
-    alignItems: 'center',
-    flexDirection: 'row',
+  sendButton: {
+    marginLeft: 8,
+  },
+  sendButtonGradient: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
-    shadowColor: '#7DD3C0',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
     elevation: 4,
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: '#212121',
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    marginRight: 8,
+  infoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 20,
+    marginTop: 12,
   },
   infoText: {
     fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.5)',
-    marginTop: 16,
     textAlign: 'center',
     lineHeight: 16,
+    fontWeight: '500',
+  },
+  infoTextDark: {
+    color: 'rgba(255, 255, 255, 0.5)',
+  },
+  infoTextLight: {
+    color: 'rgba(0, 0, 0, 0.5)',
   },
 });
