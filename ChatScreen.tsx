@@ -226,7 +226,7 @@ const ChatScreen: React.FC = () => {
           }, 500);
         }
       }
-    }, 20); // 20ms per character for smooth typing
+    }, 5); // 5ms per character for FAST typing (so TTS starts quickly)
 
     return () => clearInterval(typingInterval);
   }, [typingMessageId, messages]);
@@ -326,23 +326,23 @@ const ChatScreen: React.FC = () => {
         content: reply,
       };
       setMessages(prev => [...prev, assistantMsg]);
-      setTypingMessageId(assistantMsg.id);
+      // TEMPORARILY DISABLE typing animation to test TTS timing
+      // setTypingMessageId(assistantMsg.id);
       
-      // Speak the reply with TTS
+      // Speak the reply with TTS - START IMMEDIATELY while typing
       console.log('[TTS] 🔊 Attempting to speak reply (length:', reply.length, 'chars)');
       console.log('[TTS] 🔊 Content preview:', reply.substring(0, 50) + '...');
       console.log('[TTS] 🎯 Conversation Mode:', conversationModeType || 'none');
       
-      setTimeout(() => {
-        const processedText = preprocessTextForTTS(reply);
-        console.log('[TTS] 🔊 Calling Tts.speak() now...');
-        console.log('[TTS] 📝 Original text:', reply.substring(0, 100));
-        console.log('[TTS] ✨ Processed text:', processedText.substring(0, 100));
-        setSpeaking(true);
-        speakingRef.current = true;
-        Tts.speak(processedText);
-        console.log('[TTS] 🔊 Tts.speak() called - waiting for events...');
-      }, 200);
+      // NO DELAY - Start TTS immediately while typing animation runs
+      const processedText = preprocessTextForTTS(reply);
+      console.log('[TTS] 🔊 Starting TTS immediately...');
+      console.log('[TTS] 📝 Original text:', reply.substring(0, 100));
+      console.log('[TTS] ✨ Processed text:', processedText.substring(0, 100));
+      setSpeaking(true);
+      speakingRef.current = true;
+      Tts.speak(processedText);
+      console.log('[TTS] 🔊 Tts.speak() called - waiting for events...');
     } catch (e: any) {
       console.log('[Send] ⚠️ Request error:', e.message || e); // Log error without showing red error
       
