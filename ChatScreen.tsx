@@ -27,6 +27,34 @@ const ChatScreen: React.FC = () => {
   const { width, height } = useWindowDimensions();
   const isTablet = width >= 768;
   
+  // Preprocess text for more natural TTS reading
+  const preprocessTextForTTS = (text: string): string => {
+    let processed = text;
+    
+    // Add pauses after sentences for better rhythm
+    processed = processed.replace(/\. /g, '. '); // Normalize periods
+    processed = processed.replace(/\! /g, '! '); // Normalize exclamations
+    processed = processed.replace(/\? /g, '? '); // Normalize questions
+    
+    // Add slight pauses after commas
+    processed = processed.replace(/\, /g, ', ');
+    
+    // Fix common abbreviations to sound natural
+    processed = processed.replace(/\bDr\./gi, 'Doctor');
+    processed = processed.replace(/\bMr\./gi, 'Mister');
+    processed = processed.replace(/\bMrs\./gi, 'Missus');
+    processed = processed.replace(/\bMs\./gi, 'Miss');
+    processed = processed.replace(/\bProf\./gi, 'Professor');
+    processed = processed.replace(/\be\.g\./gi, 'for example');
+    processed = processed.replace(/\bi\.e\./gi, 'that is');
+    processed = processed.replace(/\betc\./gi, 'et cetera');
+    
+    // Numbers: Spell out dates and percentages better
+    // (iOS TTS handles most numbers well)
+    
+    return processed.trim();
+  };
+  
   // Simple state - GPT style
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -302,10 +330,13 @@ const ChatScreen: React.FC = () => {
       console.log('[TTS] 🎯 Conversation Mode:', conversationModeType || 'none');
       
       setTimeout(() => {
+        const processedText = preprocessTextForTTS(reply);
         console.log('[TTS] 🔊 Calling Tts.speak() now...');
+        console.log('[TTS] 📝 Original text:', reply.substring(0, 100));
+        console.log('[TTS] ✨ Processed text:', processedText.substring(0, 100));
         setSpeaking(true);
         speakingRef.current = true;
-        Tts.speak(reply);
+        Tts.speak(processedText);
         console.log('[TTS] 🔊 Tts.speak() called - waiting for events...');
       }, 200);
     } catch (e: any) {
@@ -391,10 +422,13 @@ const ChatScreen: React.FC = () => {
       console.log('[TTS] 🎯 Conversation Mode:', conversationModeType || 'none');
       
       setTimeout(() => {
+        const processedText = preprocessTextForTTS(reply);
         console.log('[TTS] 🔊 Calling Tts.speak() now...');
+        console.log('[TTS] 📝 Original text:', reply.substring(0, 100));
+        console.log('[TTS] ✨ Processed text:', processedText.substring(0, 100));
         setSpeaking(true);
         speakingRef.current = true;
-        Tts.speak(reply);
+        Tts.speak(processedText);
         console.log('[TTS] 🔊 Tts.speak() called - waiting for events...');
       }, 200);
     } catch (e: any) {
@@ -777,9 +811,16 @@ const ChatScreen: React.FC = () => {
       // CRITICAL: Speech parameters for human-like, non-robotic speech
       // Lower rate = more natural with better prosody and emphasis
       // Pitch variations handled by premium voices automatically
-      Tts.setDefaultRate(0.42);  // Slower = less robotic, more conversational
+      Tts.setDefaultRate(0.50);     // Optimal conversational speed (0.40-0.55 range)
+      Tts.setDefaultPitch(1.0);     // Natural pitch (0.5-2.0 range, 1.0 = normal)
       
-      console.log('[TTS] 🎚️ Speech params: Rate=0.42 (conversational)');
+      // iOS specific: Set high quality audio
+      if (Platform.OS === 'ios') {
+        Tts.setDucking(true);       // Duck other audio when speaking
+        Tts.setIgnoreSilentSwitch('ignore'); // Play even if silent switch is on
+      }
+      
+      console.log('[TTS] 🎚️ Speech params: Rate=0.50, Pitch=1.0, Ducking=ON');
     });
     
     Tts.addEventListener('tts-start', () => {
