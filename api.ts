@@ -1,6 +1,8 @@
 import { getOrCreateDeviceId } from './deviceId';
 import { Platform } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
+import { checkNetworkConnection, isNetworkError, retryWithExponentialBackoff } from './networkUtils';
+import { logError, logInfo } from './logger';
 
 import { config } from './config';
 
@@ -85,23 +87,58 @@ export async function sendChatMessage(text: string, conversationMode?: string): 
     await initializeApi();
   }
 
-  const response = await fetch(`${config.API_BASE_URL}/generate`, {
-    method: 'POST',
-    headers: getHeaders(conversationMode),
-    body: JSON.stringify({ text }),
-  });
-  
-  const data = await response.json();
-  console.log('[API] Response data:', data); // DEBUG: See what backend returns
-  
-  // Check if response is empty or null, throw special error with backend message
-  const reply = data.response || data.reply;
-  if (!reply || reply.trim() === '') {
-    const errorMessage = data.message || data.error || 'QUOTA_EXCEEDED';
-    throw new Error(errorMessage);
+  // Check network connection first
+  const isConnected = await checkNetworkConnection();
+  if (!isConnected) {
+    throw new Error('NETWORK_ERROR: No internet connection');
   }
-  
-  return reply;
+
+  // Use retry logic with exponential backoff
+  return retryWithExponentialBackoff(async () => {
+    try {
+      const response = await fetch(`${config.API_BASE_URL}/generate`, {
+        method: 'POST',
+        headers: getHeaders(conversationMode),
+        body: JSON.stringify({ text }),
+      });
+      
+      if (__DEV__) console.log('[API] Response status:', response.status);
+      
+      // Check for rate limit error (429)
+      if (response.status === 429) {
+        throw new Error('RATE_LIMIT_EXCEEDED');
+      }
+      
+      // Try to parse JSON response
+      let data;
+      try {
+        data = await response.json();
+        if (__DEV__) console.log('[API] Response data:', JSON.stringify(data).substring(0, 200));
+      } catch (parseError) {
+        logError(parseError as Error, 'API JSON parse');
+        throw new Error('QUOTA_EXCEEDED');
+      }
+      
+      // Check if response is empty or null
+      const reply = data.response || data.reply;
+      if (__DEV__) console.log('[API] Reply extracted:', reply ? reply.substring(0, 100) : 'EMPTY');
+      
+      if (!reply || reply.trim() === '') {
+        const errorMessage = data.message || data.error;
+        if (__DEV__) console.log('[API] Empty reply, error message:', errorMessage);
+        throw new Error(errorMessage || 'QUOTA_EXCEEDED');
+      }
+      
+      return reply;
+    } catch (error: any) {
+      if (!__DEV__) {
+        logError(error, 'API sendChatMessage');
+      }
+      
+      // Re-throw to be handled by UI
+      throw error;
+    }
+  }, 2, 1500); // Max 2 retries with 1.5s base delay
 }
 
 // Generate speech using ElevenLabs free public TTS
