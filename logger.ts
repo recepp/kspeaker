@@ -1,15 +1,14 @@
-import crashlytics from '@react-native-firebase/crashlytics';
+import * as Sentry from '@sentry/react-native';
 
-// Production-ready error logging
+// Production-ready error logging with Sentry
 export const logError = (error: Error, context?: string) => {
   if (__DEV__) {
     console.error(`[Error] ${context}:`, error);
   } else {
-    // In production, log to Firebase Crashlytics
-    crashlytics().recordError(error);
-    if (context) {
-      crashlytics().log(`Context: ${context}`);
-    }
+    // Production: Send to Sentry
+    Sentry.captureException(error, {
+      tags: { context: context || 'unknown' },
+    });
   }
 };
 
@@ -17,8 +16,12 @@ export const logInfo = (message: string, ...args: any[]) => {
   if (__DEV__) {
     console.log(message, ...args);
   } else {
-    // Production: Log to Firebase Crashlytics
-    crashlytics().log(message);
+    // Production: Add breadcrumb for debugging context
+    Sentry.addBreadcrumb({
+      message,
+      level: 'info',
+      data: args.length > 0 ? { args } : undefined,
+    });
   }
 };
 
@@ -26,7 +29,10 @@ export const logWarning = (message: string, ...args: any[]) => {
   if (__DEV__) {
     console.warn(message, ...args);
   } else {
-    // Production: Log to Firebase Crashlytics
-    crashlytics().log(`[Warning] ${message}`);
+    // Production: Send warning to Sentry
+    Sentry.captureMessage(message, {
+      level: 'warning',
+      extra: args.length > 0 ? { args } : undefined,
+    });
   }
 };

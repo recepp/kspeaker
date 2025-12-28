@@ -2,7 +2,7 @@ import { getOrCreateDeviceId } from './deviceId';
 import { Platform } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 import { checkNetworkConnection, isNetworkError, retryWithExponentialBackoff } from './networkUtils';
-import { logError, logInfo } from './logger';
+import { logError, logInfo, logWarning } from './logger';
 
 import { config } from './config';
 
@@ -71,11 +71,13 @@ export async function registerUser(email: string): Promise<boolean> {
     if (response.ok) {
       apiState.email = email;
       apiState.isRegistered = true;
+      logInfo(`[API] User registered successfully: ${email}`);
       return true;
     }
+    logWarning(`[API] Registration failed: ${response.status}`);
     return false;
   } catch (error) {
-    console.error('Registration error:', error);
+    logError(error as Error, 'API registerUser');
     return false;
   }
 }
@@ -129,6 +131,7 @@ export async function sendChatMessage(text: string, conversationMode?: string): 
         throw new Error(errorMessage || 'QUOTA_EXCEEDED');
       }
       
+      logInfo(`[API] Chat response received: ${reply.substring(0, 50)}...`);
       return reply;
     } catch (error: any) {
       if (!__DEV__) {

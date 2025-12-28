@@ -552,13 +552,13 @@ const ChatScreen: React.FC = () => {
     setTypingMessageId(assistantMsg.id);
   };
 
-  // TEST ONLY: Reset registration for testing email popup
-  const resetRegistration = async () => {
-    console.log('[TEST] Resetting registration...');
+  // Login: Reset registration to show email modal
+  const handleLogin = async () => {
+    console.log('[Login] Clearing registration...');
     await clearRegistration();
     setShowEmailModal(true);
     closeDrawer();
-    console.log('[TEST] Registration cleared, email modal opened');
+    console.log('[Login] Email modal opened for new login');
   };
 
   const getTranslation = (key: string) => {
@@ -567,6 +567,7 @@ const ChatScreen: React.FC = () => {
       settings: { en: 'Settings', tr: 'Ayarlar', ar: 'الإعدادات', ru: 'Настройки' },
       about: { en: 'About Kspeaker', tr: 'Kspeaker Hakkında', ar: 'حول Kspeaker', ru: 'О Kspeaker' },
       language: { en: 'Language', tr: 'Dil', ar: 'اللغة', ru: 'Язык' },
+      login: { en: 'Login', tr: 'Giriş Yap', ar: 'تسجيل الدخول', ru: 'Войти' },
       askKspeaker: { en: 'Ask Kspeaker...', tr: 'Kspeaker\'a sor...', ar: 'اسأل Kspeaker...', ru: 'Спросите Kspeaker...' },
       startConversation: { en: 'Start a conversation', tr: 'Sohbete başla', ar: 'ابدأ محادثة', ru: 'Начать разговор' },
       askAnything: { en: 'Ask me anything or use the microphone', tr: 'Bana bir şey sor veya mikrofonu kullan', ar: 'اسألني أي شيء أو استخدم الميكروفون', ru: 'Спросите меня о чем угодно или используйте микрофон' },
@@ -1165,11 +1166,13 @@ const ChatScreen: React.FC = () => {
             </Text>
           </TouchableOpacity>
           
-          {/* TEST ONLY - Refresh Registration */}
+          {/* Login */}
           <View style={styles.drawerDivider} />
-          <TouchableOpacity style={styles.drawerItemTest} onPress={resetRegistration}>
-            <Ionicons name="refresh-outline" size={24} color="#FFA500" />
-            <Text style={styles.drawerItemTestText}>Refresh Registration (Test)</Text>
+          <TouchableOpacity style={styles.drawerItem} onPress={handleLogin}>
+            <Ionicons name="log-in-outline" size={24} color={theme === 'dark' ? '#4ECDC4' : '#2E8B8B'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#4ECDC4' : '#2E8B8B' }]}>
+              {getTranslation('login')}
+            </Text>
           </TouchableOpacity>
         </View>
       </Animated.View>

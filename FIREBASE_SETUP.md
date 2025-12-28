@@ -17,7 +17,7 @@
 
 ### 2. iOS App Ekle
 1. Firebase Console'da projenizi açın
-2. iOS simgesine tıklayın
+2. iOS simgesine tıklayınBu
 3. **iOS bundle ID**: `org.reactjs.native.example.kspeaker`
    - Bunu `ios/kspeaker/Info.plist` dosyasından kontrol edin
 4. App nickname: Kspeaker
