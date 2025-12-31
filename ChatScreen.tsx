@@ -75,6 +75,8 @@ const ChatScreen: React.FC = () => {
   const [quizMode, setQuizMode] = useState(false);
   const [quizLevel, setQuizLevel] = useState<string | null>(null);
   const [quizQuestionCount, setQuizQuestionCount] = useState(0);
+  const [roleplayMode, setRoleplayMode] = useState(false);
+  const [roleplayScenario, setRoleplayScenario] = useState<string | null>(null);
   const [showDropup, setShowDropup] = useState(false);
   const [showModeSelector, setShowModeSelector] = useState(false); // Mode selection menu
   const [theme, setTheme] = useState<Theme>('dark');
@@ -90,6 +92,8 @@ const ChatScreen: React.FC = () => {
   const isSending = useRef(false);
   const currentVoiceText = useRef('');
   const voiceStateRef = useRef<VoiceState>('idle'); // Ref for closures
+  const userStoppedVoice = useRef(false); // Track if user manually stopped voice
+  const voiceRetryCount = useRef(0); // Track retry attempts
   const drawerAnim = useRef(new Animated.Value(-280)).current;
   const shimmerAnim = useRef(new Animated.Value(0)).current;
   const micPulseAnim = useRef(new Animated.Value(1)).current;
@@ -99,7 +103,10 @@ const ChatScreen: React.FC = () => {
   // Sync voiceState ref with state for closures
   useEffect(() => {
     voiceStateRef.current = voiceState;
-    if (__DEV__) console.log('[Voice] State changed:', voiceState);
+    if (__DEV__) {
+      console.log('[Voice] State changed:', voiceState);
+      console.log('[UI] Stop button should be visible:', voiceState !== 'idle');
+    }
   }, [voiceState]);
 
   // Load theme and language from storage
@@ -293,9 +300,30 @@ const ChatScreen: React.FC = () => {
     try {
       let reply = '';
       
-      // Quiz mode logic
-      if (quizMode && !quizLevel) {
-        // Level selection
+      // Roleplay mode logic
+      if (roleplayMode && !roleplayScenario) {
+        // Scenario selection
+        if (['1', '2', '3', '4', '5'].includes(userInput)) {
+          setRoleplayScenario(userInput);
+          
+          // Map scenario numbers to specific roles
+          const scenarioRoles: Record<string, string> = {
+            '1': 'You are a hotel receptionist. I am checking into your hotel. Start by greeting me warmly and asking for my reservation details.',
+            '2': 'You are a waiter at a restaurant. I am a customer ready to order. Start by greeting me and asking what I would like to order.',
+            '3': 'You are an HR manager conducting a job interview. I am the job candidate. Start by introducing yourself and asking me to tell you about myself.',
+            '4': 'You are a doctor. I am a patient with health concerns. Start by greeting me and asking what brings me in today.',
+            '5': 'You are a shop assistant at a clothing store. I am a customer looking for items. Start by greeting me and asking how you can help me today.',
+          };
+          
+          reply = await sendChatMessage(scenarioRoles[userInput], 'roleplay');
+        } else {
+          reply = 'Please type a number between 1-5 to select a roleplay scenario.';
+        }
+      } else if (roleplayMode && roleplayScenario) {
+        // Roleplay in progress
+        reply = await sendChatMessage(userInput, 'roleplay');
+      } else if (quizMode && !quizLevel) {
+        // Quiz level selection
         if (userInput === '1' || userInput.toLowerCase().includes('beginner')) {
           setQuizLevel('beginner');
           reply = await sendChatMessage('I want to take an English quiz at beginner level. Please give me 5 simple questions about basic English vocabulary and grammar. Number them 1-5.', conversationModeType || undefined);
@@ -332,22 +360,11 @@ const ChatScreen: React.FC = () => {
       setMessages(prev => [...prev, assistantMsg]);
       setTypingMessageId(assistantMsg.id);
       
-      // Speak the reply with TTS - START IMMEDIATELY while typing
+      // DON'T speak the reply in text mode - only speak in voice conversation mode
+      // This prevents unwanted TTS when user types messages
       if (__DEV__) {
-        console.log('[TTS] 🔊 Attempting to speak reply (length:', reply.length, 'chars)');
-        console.log('[TTS] 🔊 Content preview:', reply.substring(0, 50) + '...');
-        console.log('[TTS] 🎯 Conversation Mode:', conversationModeType || 'none');
+        console.log('[TTS] 🔇 Text message mode - TTS disabled');
       }
-      
-      // NO DELAY - Start TTS immediately while typing animation runs
-      const processedText = preprocessTextForTTS(reply);
-      if (__DEV__) {
-        console.log('[TTS] 🔊 Starting TTS immediately...');
-        console.log('[TTS] 📝 Original text:', reply.substring(0, 100));
-        console.log('[TTS] ✨ Processed text:', processedText.substring(0, 100));
-      }
-      Tts.speak(processedText);
-      if (__DEV__) console.log('[TTS] 🔊 Tts.speak() called - waiting for events...');
     } catch (e: any) {
       if (__DEV__) {
         console.log('[Send] ⚠️ Request error:', e.message || e);
@@ -614,9 +631,17 @@ const ChatScreen: React.FC = () => {
   // State machine: idle → listening → processing → speaking → listening (loop)
   // Single button: Tap to start/stop entire conversation
   
-  const startVoiceConversation = () => {
-    if (__DEV__) console.log('[Voice] 🎙️ Starting conversation mode');
+  const startVoiceConversation = (isRetry = false) => {
+    if (__DEV__) console.log('[Voice] 🎙️ Starting conversation mode, isRetry:', isRetry);
     setVoiceState('listening');
+    voiceStateRef.current = 'listening';
+    
+    // Only reset flags on fresh start, not on retry
+    if (!isRetry) {
+      userStoppedVoice.current = false;
+      voiceRetryCount.current = 0;
+    }
+    
     currentVoiceText.current = '';
     
     let hasReceivedText = false;
@@ -636,16 +661,18 @@ const ChatScreen: React.FC = () => {
           if (__DEV__) console.log('[Voice] ✅ Silence detected, processing:', text);
           stopListening();
           setVoiceState('processing');
+          voiceStateRef.current = 'processing';
           sendVoiceMessage(text);
           currentVoiceText.current = '';
         } else {
           if (__DEV__) console.log('[Voice] ⏸️ Silence but no text, restarting...');
-          // Restart listening
-          if (voiceStateRef.current === 'listening') {
+          // Only restart if still NOT idle AND user hasn't manually stopped
+          if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
             stopListening();
             setTimeout(() => {
-              if (voiceStateRef.current !== 'idle') {
-                startVoiceConversation();
+              // Double-check: only restart if STILL listening and not manually stopped
+              if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+                startVoiceConversation(true); // Pass true to indicate retry
               }
             }, 500);
           }
@@ -666,19 +693,29 @@ const ChatScreen: React.FC = () => {
         resetTimer();
       },
       () => {
-        // On error
-        console.log('[Voice] ❌ Speech recognition error');
+        // On error - don't try to JSON.stringify the error object, it crashes!
+        console.log('[Voice] ❌ Speech recognition error occurred');
         
         if (silenceTimer.current) {
           clearTimeout(silenceTimer.current);
           silenceTimer.current = null;
         }
         
-        // Retry after 1 second if still in conversation
+        // LIMIT RETRIES - max 2 attempts to prevent infinite loop
+        voiceRetryCount.current++;
+        if (voiceRetryCount.current >= 3) {
+          console.log('[Voice] 🛑 Max retries reached (3), stopping voice mode');
+          stopVoiceConversation();
+          return;
+        }
+        
+        // Only retry if still in listening state AND user hasn't manually stopped
         setTimeout(() => {
-          if (voiceStateRef.current !== 'idle') {
-            console.log('[Voice] 🔄 Retrying after error...');
-            startVoiceConversation();
+          if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+            console.log('[Voice] 🔄 Retrying after error... (attempt', voiceRetryCount.current, '/3)');
+            startVoiceConversation(true); // Pass true to indicate retry
+          } else {
+            console.log('[Voice] 🛑 Not retrying - user stopped or state changed');
           }
         }, 1000);
       }
@@ -690,7 +727,10 @@ const ChatScreen: React.FC = () => {
   const stopVoiceConversation = () => {
     console.log('[Voice] 🛑 Stopping conversation mode');
     
-    // Clear timer
+    // Set manual stop flag to prevent any auto-restarts
+    userStoppedVoice.current = true;
+    
+    // Clear timer FIRST
     if (silenceTimer.current) {
       clearTimeout(silenceTimer.current);
       silenceTimer.current = null;
@@ -702,21 +742,30 @@ const ChatScreen: React.FC = () => {
     // Stop speaking
     Tts.stop();
     
-    // Reset state
-    setVoiceState('idle');
+    // Clear text
     currentVoiceText.current = '';
+    
+    // IMPORTANT: Set to idle LAST to ensure UI updates properly
+    // Update both state and ref
+    setVoiceState('idle');
+    voiceStateRef.current = 'idle';
+    
+    console.log('[Voice] ✅ Voice conversation stopped, state set to idle');
   };
   
   const handleMicButton = () => {
     triggerHaptic('light');
     
-    if (voiceState === 'idle') {
+    console.log('[Mic] 🔘 Button pressed, current state:', voiceState);
+    console.log('[Mic] 🔘 Ref state:', voiceStateRef.current);
+    
+    if (voiceStateRef.current === 'idle') {
       // Start conversation
-      console.log('[Mic] ▶️ Starting');
+      console.log('[Mic] ▶️ Starting voice conversation');
       startVoiceConversation();
     } else {
-      // Stop conversation (any state)
-      console.log('[Mic] ⏹️ Stopping');
+      // Stop conversation (any state: listening, processing, or speaking)
+      console.log('[Mic] ⏹️ Stopping voice conversation from state:', voiceStateRef.current);
       stopVoiceConversation();
     }
   };
@@ -820,19 +869,22 @@ const ChatScreen: React.FC = () => {
     Tts.addEventListener('tts-start', () => {
       console.log('[TTS] 🔊 Started speaking');
       setVoiceState('speaking');
+      voiceStateRef.current = 'speaking';
     });
     
     Tts.addEventListener('tts-finish', () => {
       console.log('[TTS] ✅ Finished speaking');
       
-      // Auto-restart listening if not idle
-      if (voiceStateRef.current === 'speaking') {
-        console.log('[Voice] 🔄 TTS finished, restarting listening...');
+      // Auto-restart listening only if still speaking AND user hasn't manually stopped
+      if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
+        console.log('[Voice] 🔄 TTS finished, restarting listening immediately...');
         setTimeout(() => {
-          if (voiceStateRef.current === 'speaking') {
-            startVoiceConversation();
+          if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
+            startVoiceConversation(false); // Fresh start after speaking, not a retry
           }
-        }, 800);
+        }, 300); // Reduced from 800ms to 300ms for faster response
+      } else {
+        console.log('[Voice] 🛑 Not restarting - user stopped or state changed');
       }
     });
     
@@ -1279,11 +1331,45 @@ const ChatScreen: React.FC = () => {
                         styles.dropupItem,
                         conversationModeType === mode && styles.dropupItemActive
                       ]}
-                      onPress={() => {
+                      onPress={async () => {
                         setConversationModeType(mode);
                         setShowDropup(false);
                         setShowModeSelector(false);
                         triggerHaptic('medium');
+                        
+                        // If roleplay mode is selected, send intro message
+                        if (mode === 'roleplay') {
+                          try {
+                            setIsLoadingResponse(true);
+                            setRoleplayMode(true);
+                            setRoleplayScenario(null);
+                            const roleplayIntro = await sendChatMessage(
+                              'Present 5 roleplay scenarios for English practice. Format each as: number, emoji, title, short description. Ask user to type a number 1-5 to choose.',
+                              'roleplay'
+                            );
+                            
+                            const assistantMsg: ChatMessage = {
+                              id: Date.now().toString(),
+                              role: 'assistant',
+                              content: roleplayIntro,
+                            };
+                            setMessages(prev => [...prev, assistantMsg]);
+                            setTypingMessageId(assistantMsg.id);
+                            
+                            // Speak the intro
+                            const processedText = preprocessTextForTTS(roleplayIntro);
+                            Tts.speak(processedText);
+                          } catch (error) {
+                            console.log('[Roleplay] Error loading intro:', error);
+                            setRoleplayMode(false);
+                          } finally {
+                            setIsLoadingResponse(false);
+                          }
+                        } else {
+                          // Clear roleplay mode if switching to another mode
+                          setRoleplayMode(false);
+                          setRoleplayScenario(null);
+                        }
                       }}
                     >
                       <Ionicons 
@@ -1385,7 +1471,8 @@ const ChatScreen: React.FC = () => {
                     </TouchableOpacity>
                   ) : (
                     <>
-                      {messages.length > 0 && (
+                      {/* Clear button - show when has messages and NOT in voice mode */}
+                      {messages.length > 0 && voiceState === 'idle' && (
                         <TouchableOpacity
                           style={styles.clearButton}
                           onPress={clearAll}
@@ -1393,6 +1480,21 @@ const ChatScreen: React.FC = () => {
                           <Ionicons name="trash-outline" size={24} color="#EF4444" />
                         </TouchableOpacity>
                       )}
+                      
+                      {/* Stop button - only show during voice conversation */}
+                      {voiceState !== 'idle' && (
+                        <TouchableOpacity
+                          style={styles.stopButton}
+                          onPress={() => {
+                            console.log('[Stop Button] 🛑 iOS Stop button pressed!');
+                            stopVoiceConversation();
+                          }}
+                        >
+                          <Ionicons name="stop-circle" size={32} color="#EF4444" />
+                        </TouchableOpacity>
+                      )}
+                      
+                      {/* Mic button - always visible */}
                       <TouchableOpacity
                         style={[
                           styles.micButton, 
@@ -1514,7 +1616,8 @@ const ChatScreen: React.FC = () => {
                     </TouchableOpacity>
                   ) : (
                     <>
-                      {messages.length > 0 && (
+                      {/* Clear button - show when has messages and NOT in voice mode */}
+                      {messages.length > 0 && voiceState === 'idle' && (
                         <TouchableOpacity
                           style={styles.clearButton}
                           onPress={clearAll}
@@ -1522,6 +1625,21 @@ const ChatScreen: React.FC = () => {
                           <Ionicons name="trash-outline" size={24} color="#EF4444" />
                         </TouchableOpacity>
                       )}
+                      
+                      {/* Stop button - only show during voice conversation */}
+                      {voiceState !== 'idle' && (
+                        <TouchableOpacity
+                          style={styles.stopButton}
+                          onPress={() => {
+                            console.log('[Stop Button] 🛑 Android Stop button pressed!');
+                            stopVoiceConversation();
+                          }}
+                        >
+                          <Ionicons name="stop-circle" size={32} color="#EF4444" />
+                        </TouchableOpacity>
+                      )}
+                      
+                      {/* Mic button - always visible */}
                       <TouchableOpacity
                         style={[
                           styles.micButton, 
@@ -1549,6 +1667,7 @@ const ChatScreen: React.FC = () => {
                   <>
                     {/* Outer pulse */}
                     <Animated.View 
+                      pointerEvents="none"
                       style={[
                         styles.micPulse,
                         { 
@@ -1563,6 +1682,7 @@ const ChatScreen: React.FC = () => {
                     />
                     {/* Middle pulse */}
                     <Animated.View 
+                      pointerEvents="none"
                       style={[
                         styles.micPulse,
                         { 
@@ -1580,6 +1700,7 @@ const ChatScreen: React.FC = () => {
                     />
                     {/* Inner pulse */}
                     <Animated.View 
+                      pointerEvents="none"
                       style={[
                         styles.micPulse,
                         { 
@@ -1763,6 +1884,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#4A5568',
+  },
+  stopButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#3E3E42',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EF4444',
   },
   empty: {
     flex: 1,

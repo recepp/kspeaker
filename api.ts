@@ -46,7 +46,7 @@ const getHeaders = (conversationMode?: string) => {
   }
   
   if (conversationMode) {
-    headers['X-Conversation-Mode'] = conversationMode;
+    headers['X-Role-Context'] = conversationMode;
   }
   
   return headers;
