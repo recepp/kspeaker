@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView, Switch, Alert } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import { sendChatMessage, initializeApi, registerUser } from './api';
 import { checkRegistration, saveRegistration, clearRegistration } from './registration';
 import { EmailRegistrationModal } from './components/EmailRegistrationModal';
@@ -10,6 +11,7 @@ import Tts from 'react-native-tts';
 import LinearGradient from 'react-native-linear-gradient';
 import { BlurView } from '@react-native-community/blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NotificationService from './notificationService';
 
 type Theme = 'dark' | 'light';
 type Role = 'user' | 'assistant';
@@ -20,7 +22,12 @@ interface ChatMessage {
   content: string;
 }
 
-const ChatScreen: React.FC = () => {
+interface ChatScreenProps {
+  navigation?: any;
+}
+
+const ChatScreen: React.FC<ChatScreenProps> = (props) => {
+  const navigation = useNavigation();
   // Removed debug log - too verbose
   
   const insets = useSafeAreaInsets();
@@ -83,6 +90,8 @@ const ChatScreen: React.FC = () => {
   const [messageContextMenu, setMessageContextMenu] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [conversationModeType, setConversationModeType] = useState<string | null>(null); // conversation|teacher|beginner|casual_friend|strict|roleplay|business
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const scrollButtonAnim = useRef(new Animated.Value(0)).current;
   
@@ -138,6 +147,19 @@ const ChatScreen: React.FC = () => {
     loadLanguage();
   }, []);
 
+  // Dil değiştiğinde bildirimleri güncelle
+  useEffect(() => {
+    const updateNotificationLanguage = async () => {
+      // Bildirimler açıksa, seçili dilde yeniden ayarla
+      if (notificationsEnabled) {
+        console.log('[Notifications] 🌍 Language changed to:', selectedLanguage);
+        NotificationService.scheduleDailyReminders(selectedLanguage);
+      }
+    };
+    
+    updateNotificationLanguage();
+  }, [selectedLanguage]);
+
   // Toggle theme
   const toggleTheme = async () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
@@ -150,6 +172,60 @@ const ChatScreen: React.FC = () => {
       await AsyncStorage.setItem('appTheme', newTheme);
     } catch (e) {
       console.error('[Theme] Error saving theme:', e);
+    }
+  };
+
+  // Toggle notifications
+  const toggleNotifications = async () => {
+    const newValue = !notificationsEnabled;
+    setNotificationsEnabled(newValue);
+    
+    try {
+      if (newValue) {
+        console.log('[Notifications] 📲 Requesting permissions...');
+        // Bildirim izni iste
+        const permissions = await NotificationService.requestPermissions();
+        console.log('[Notifications] 📲 Permission result:', permissions);
+        
+        if (permissions) {
+          console.log('[Notifications] ✅ Permission granted, scheduling...');
+          
+          // Günlük hatırlatıcıları seçili dilde ayarla
+          NotificationService.scheduleDailyReminders(selectedLanguage);
+          
+          // Zamanlanmış bildirimleri kontrol et
+          setTimeout(() => {
+            NotificationService.checkScheduledNotifications();
+          }, 1000);
+          
+          // Bildirim metnini seçili dile göre al
+          const notificationText = NotificationService.getNotificationText(selectedLanguage);
+          
+          Alert.alert(
+            notificationText.title,
+            notificationText.message,
+            [{ text: notificationText.button, style: 'default' }]
+          );
+        } else {
+          console.log('[Notifications] ❌ Permission denied');
+          setNotificationsEnabled(false);
+          Alert.alert(
+            'İzin Gerekli',
+            'Bildirimler için lütfen ayarlardan izin verin.',
+            [{ text: 'Tamam' }]
+          );
+        }
+      } else {
+        // Bildirimleri kapat
+        console.log('[Notifications] 🔕 Disabling notifications...');
+        NotificationService.cancelAllNotifications();
+        Alert.alert('🔕 Bildirimler Kapatıldı', 'Artık hatırlatma almayacaksın.');
+      }
+      
+      await AsyncStorage.setItem('notificationsEnabled', JSON.stringify(newValue));
+    } catch (error) {
+      console.error('[Notifications] ❌ Error:', error);
+      setNotificationsEnabled(false);
     }
   };
 
@@ -908,6 +984,27 @@ const ChatScreen: React.FC = () => {
       if (!registered) {
         setShowEmailModal(true);
       }
+      
+      // Bildirim durumunu yükle veya ilk kez açılıyorsa otomatik aç
+      try {
+        const notifEnabled = await AsyncStorage.getItem('notificationsEnabled');
+        if (notifEnabled === null) {
+          // İlk kez açılıyor, otomatik olarak bildirimleri aç
+          const permissions = await NotificationService.requestPermissions();
+          if (permissions) {
+            setNotificationsEnabled(true);
+            NotificationService.scheduleDailyReminders(selectedLanguage);
+            await AsyncStorage.setItem('notificationsEnabled', 'true');
+            console.log('[Notifications] 🔔 Auto-enabled on first launch');
+          }
+        } else if (notifEnabled === 'true') {
+          setNotificationsEnabled(true);
+          // Mevcut bildirimleri kontrol et, yoksa yeniden ayarla
+          NotificationService.checkScheduledNotifications();
+        }
+      } catch (error) {
+        console.error('[Notifications] Load error:', error);
+      }
     };
     init();
 
@@ -1215,6 +1312,38 @@ const ChatScreen: React.FC = () => {
             <Ionicons name={theme === 'dark' ? 'sunny' : 'moon'} size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>
               {theme === 'dark' ? getTranslation('lightMode') : getTranslation('darkMode')}
+            </Text>
+          </TouchableOpacity>
+          
+          {/* Daily Reminders */}
+          <View style={styles.drawerDivider} />
+          <View style={styles.drawerItem}>
+            <Ionicons name="notifications-outline" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { flex: 1, color: theme === 'dark' ? '#7DD3C0' : '#4A9B8F' }]}>
+              Günlük Hatırlatıcı
+            </Text>
+            <Switch
+              value={notificationsEnabled}
+              onValueChange={toggleNotifications}
+              trackColor={{ false: '#767577', true: '#7DD3C0' }}
+              thumbColor={notificationsEnabled ? '#FFFFFF' : '#f4f3f4'}
+              ios_backgroundColor="#3e3e3e"
+            />
+          </View>
+          
+          {/* Flash Cards */}
+          <View style={styles.drawerDivider} />
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            onPress={() => {
+              toggleDrawer();
+              // @ts-ignore
+              navigation.navigate('LevelSelection');
+            }}
+          >
+            <Ionicons name="layers-outline" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#7DD3C0' : '#4A9B8F' }]}>
+              Flash Cards
             </Text>
           </TouchableOpacity>
           

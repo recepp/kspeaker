@@ -2,9 +2,10 @@ import UIKit
 import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
+import UserNotifications
 
 @main
-class AppDelegate: UIResponder, UIApplicationDelegate {
+class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
   var window: UIWindow?
 
   var reactNativeDelegate: ReactNativeDelegate?
@@ -21,6 +22,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     reactNativeDelegate = delegate
     reactNativeFactory = factory
 
+    // Notification setup
+    UNUserNotificationCenter.current().delegate = self
+    let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
+    UNUserNotificationCenter.current().requestAuthorization(
+      options: authOptions,
+      completionHandler: { granted, error in
+        if granted {
+          print("Notification permission granted")
+        }
+      }
+    )
+    application.registerForRemoteNotifications()
+
     window = UIWindow(frame: UIScreen.main.bounds)
 
     factory.startReactNative(
@@ -30,6 +44,26 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     )
 
     return true
+  }
+  
+  // Handle notification when app is in foreground
+  func userNotificationCenter(_ center: UNUserNotificationCenter,
+                              willPresent notification: UNNotification,
+                              withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+    // iOS 14+ için .banner, eski sürümler için .alert
+    if #available(iOS 14.0, *) {
+      completionHandler([.banner, .sound, .badge, .list])
+    } else {
+      completionHandler([.alert, .sound, .badge])
+    }
+    print("📬 Notification presented in foreground: \(notification.request.content.title)")
+  }
+  
+  // Handle notification tap
+  func userNotificationCenter(_ center: UNUserNotificationCenter,
+                              didReceive response: UNNotificationResponse,
+                              withCompletionHandler completionHandler: @escaping () -> Void) {
+    completionHandler()
   }
 }
 
