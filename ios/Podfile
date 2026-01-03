@@ -20,7 +20,9 @@ target 'kspeaker' do
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.
-    :app_path => "#{Pod::Config.instance.installation_root}/.."
+    :app_path => "#{Pod::Config.instance.installation_root}/..",
+    # Hermes is enabled by default. Disable by setting this flag to false.
+    :hermes_enabled => true
   )
 
   post_install do |installer|
@@ -35,19 +37,68 @@ target 'kspeaker' do
     # Enable dSYM generation for all pods (including Hermes)
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
+        # Enable dSYM for Release builds
         if config.name == 'Release'
           config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+          config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'YES'
           config.build_settings['STRIP_INSTALLED_PRODUCT'] = 'NO'
           config.build_settings['COPY_PHASE_STRIP'] = 'NO'
-          config.build_settings['STRIP_STYLE'] = 'non-global'
-          
-          # Special handling for Hermes
-          if target.name == 'hermes-engine'
-            config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'YES'
-            config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf'
-          end
+          config.build_settings['STRIP_STYLE'] = 'debugging'
+        end
+        
+        # Hermes-specific dSYM settings
+        if target.name == 'hermes-engine'
+          config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+          config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'YES'
+          config.build_settings['DWARF_DSYM_FOLDER_PATH'] = '$(CONFIGURATION_BUILD_DIR)'
+          config.build_settings['DWARF_DSYM_FILE_NAME'] = '$(EXECUTABLE_NAME).dSYM'
         end
       end
     end
+    
+    # Create Hermes dSYM for iOS devices
+    puts "🔍 Preparing Hermes dSYM files for iOS..."
+    
+    hermes_xcframework = File.join(__dir__, "Pods/hermes-engine/destroot/Library/Frameworks/universal/hermes.xcframework")
+    
+    if Dir.exist?(hermes_xcframework)
+      # iOS device için (arm64)
+      ios_device_framework = File.join(hermes_xcframework, "ios-arm64/hermes.framework")
+      if Dir.exist?(ios_device_framework)
+        hermes_binary = File.join(ios_device_framework, "hermes")
+        dsym_output = File.join(File.dirname(ios_device_framework), "hermes.framework.dSYM")
+        
+        if File.exist?(hermes_binary)
+          if !Dir.exist?(dsym_output)
+            puts "🔨 Creating dSYM for iOS device Hermes (arm64)..."
+            system("xcrun dsymutil '#{hermes_binary}' -o '#{dsym_output}'")
+            
+            if Dir.exist?(dsym_output)
+              puts "✅ iOS device Hermes dSYM created: #{dsym_output}"
+            else
+              puts "⚠️  Failed to create iOS device Hermes dSYM"
+            end
+          else
+            puts "✅ iOS device Hermes dSYM already exists"
+          end
+        end
+      end
+      
+      # iOS simulator için (arm64_x86_64-simulator)
+      ios_sim_framework = File.join(hermes_xcframework, "ios-arm64_x86_64-simulator/hermes.framework")
+      if Dir.exist?(ios_sim_framework)
+        hermes_binary = File.join(ios_sim_framework, "hermes")
+        dsym_output = File.join(File.dirname(ios_sim_framework), "hermes.framework.dSYM")
+        
+        if File.exist?(hermes_binary) && !Dir.exist?(dsym_output)
+          puts "🔨 Creating dSYM for iOS simulator Hermes..."
+          system("xcrun dsymutil '#{hermes_binary}' -o '#{dsym_output}'")
+        end
+      end
+    else
+      puts "⚠️  Hermes XCFramework not found at: #{hermes_xcframework}"
+    end
+    
+    puts "✅ Hermes dSYM preparation complete"
   end
 end
