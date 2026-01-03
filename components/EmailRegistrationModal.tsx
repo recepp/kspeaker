@@ -10,6 +10,9 @@ import {
   useColorScheme,
   Keyboard,
   TouchableWithoutFeedback,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -55,133 +58,146 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
       transparent
       animationType="fade"
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={styles.modalContainer}>
-          <View style={[
-            styles.modalContent,
-            isDark ? styles.modalContentDark : styles.modalContentLight
-          ]}>
-            {/* Close/Dismiss area visual indicator */}
-            <View style={styles.dragIndicator} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.modalContainer}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.modalContainerInner}>
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={[
+                styles.modalContent,
+                isDark ? styles.modalContentDark : styles.modalContentLight
+              ]}>
+                {/* Close/Dismiss area visual indicator */}
+                <View style={styles.dragIndicator} />
 
-            {/* Logo/Icon Section */}
-            <View style={[
-              styles.iconCircle,
-              isDark ? styles.iconCircleDark : styles.iconCircleLight
-            ]}>
-              <LinearGradient
-                colors={isDark ? ['#7DD3C0', '#5EBAAA'] : ['#4A6FA5', '#3A5A8A']}
-                style={styles.iconGradient}
-              >
-                <Ionicons 
-                  name="mail-outline" 
-                  size={38} 
-                  color="#FFFFFF" 
-                />
-              </LinearGradient>
-            </View>
-
-            {/* Title Section */}
-            <Text style={[
-              styles.title,
-              isDark ? styles.titleDark : styles.titleLight
-            ]}>
-              Welcome to KSpeaker! 👋
-            </Text>
-            <Text style={[
-              styles.subtitle,
-              isDark ? styles.subtitleDark : styles.subtitleLight
-            ]}>
-              Let's start your English learning journey
-            </Text>
-            
-            {/* Email Input with Send Button */}
-            <View style={[
-              styles.inputContainer,
-              isDark ? styles.inputContainerDark : styles.inputContainerLight,
-              isFocused && (isDark ? styles.inputContainerFocusedDark : styles.inputContainerFocusedLight),
-              error && styles.inputContainerError
-            ]}>
-              <Ionicons 
-                name="mail" 
-                size={20} 
-                color={isFocused ? (isDark ? '#7DD3C0' : '#4A6FA5') : (isDark ? '#888' : '#999')}
-                style={styles.inputIcon} 
-              />
-              <TextInput
-                style={[
-                  styles.input,
-                  isDark ? styles.inputDark : styles.inputLight
-                ]}
-                placeholder="your.email@example.com"
-                placeholderTextColor={isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
-                value={email}
-                onChangeText={(text) => {
-                  setEmail(text);
-                  setError('');
-                }}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isLoading}
-                onFocus={() => setIsFocused(true)}
-                onBlur={() => setIsFocused(false)}
-              />
-              
-              {/* Send Button */}
-              <TouchableOpacity 
-                onPress={handleSubmit}
-                disabled={isLoading || !email}
-                style={styles.sendButton}
-                activeOpacity={0.7}
-              >
-                {isLoading ? (
-                  <ActivityIndicator 
-                    color={isDark ? '#7DD3C0' : '#4A6FA5'} 
-                    size="small" 
-                  />
-                ) : (
+                {/* Logo/Icon Section */}
+                <View style={[
+                  styles.iconCircle,
+                  isDark ? styles.iconCircleDark : styles.iconCircleLight
+                ]}>
                   <LinearGradient
                     colors={isDark ? ['#7DD3C0', '#5EBAAA'] : ['#4A6FA5', '#3A5A8A']}
-                    style={styles.sendButtonGradient}
+                    style={styles.iconGradient}
                   >
                     <Ionicons 
-                      name="send" 
-                      size={20} 
+                      name="mail-outline" 
+                      size={38} 
                       color="#FFFFFF" 
                     />
                   </LinearGradient>
-                )}
-              </TouchableOpacity>
-            </View>
+                </View>
 
-            {error ? (
-              <View style={[
-                styles.errorContainer,
-                isDark ? styles.errorContainerDark : styles.errorContainerLight
-              ]}>
-                <Ionicons name="alert-circle" size={16} color="#EF4444" />
-                <Text style={styles.errorText}>{error}</Text>
+                {/* Title Section */}
+                <Text style={[
+                  styles.title,
+                  isDark ? styles.titleDark : styles.titleLight
+                ]}>
+                  Welcome to KSpeaker! 👋
+                </Text>
+                <Text style={[
+                  styles.subtitle,
+                  isDark ? styles.subtitleDark : styles.subtitleLight
+                ]}>
+                  Let's start your English learning journey
+                </Text>
+                
+                {/* Email Input with Send Button */}
+                <View style={[
+                  styles.inputContainer,
+                  isDark ? styles.inputContainerDark : styles.inputContainerLight,
+                  isFocused && (isDark ? styles.inputContainerFocusedDark : styles.inputContainerFocusedLight),
+                  error && styles.inputContainerError
+                ]}>
+                  <Ionicons 
+                    name="mail" 
+                    size={20} 
+                    color={isFocused ? (isDark ? '#7DD3C0' : '#4A6FA5') : (isDark ? '#888' : '#999')}
+                    style={styles.inputIcon} 
+                  />
+                  <TextInput
+                    style={[
+                      styles.input,
+                      isDark ? styles.inputDark : styles.inputLight
+                    ]}
+                    placeholder="your.email@example.com"
+                    placeholderTextColor={isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                    value={email}
+                    onChangeText={(text) => {
+                      setEmail(text);
+                      setError('');
+                    }}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!isLoading}
+                    onFocus={() => setIsFocused(true)}
+                    onBlur={() => setIsFocused(false)}
+                    returnKeyType="send"
+                    onSubmitEditing={handleSubmit}
+                  />
+                  
+                  {/* Send Button */}
+                  <TouchableOpacity 
+                    onPress={handleSubmit}
+                    disabled={isLoading || !email}
+                    style={styles.sendButton}
+                    activeOpacity={0.7}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator 
+                        color={isDark ? '#7DD3C0' : '#4A6FA5'} 
+                        size="small" 
+                      />
+                    ) : (
+                      <LinearGradient
+                        colors={isDark ? ['#7DD3C0', '#5EBAAA'] : ['#4A6FA5', '#3A5A8A']}
+                        style={styles.sendButtonGradient}
+                      >
+                        <Ionicons 
+                          name="send" 
+                          size={20} 
+                          color="#FFFFFF" 
+                        />
+                      </LinearGradient>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {error ? (
+                  <View style={[
+                    styles.errorContainer,
+                    isDark ? styles.errorContainerDark : styles.errorContainerLight
+                  ]}>
+                    <Ionicons name="alert-circle" size={16} color="#EF4444" />
+                    <Text style={styles.errorText}>{error}</Text>
+                  </View>
+                ) : null}
+
+                {/* Info Text */}
+                <View style={styles.infoContainer}>
+                  <Ionicons 
+                    name="shield-checkmark-outline" 
+                    size={13} 
+                    color={isDark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(0, 0, 0, 0.45)'} 
+                  />
+                  <Text style={[
+                    styles.infoText,
+                    isDark ? styles.infoTextDark : styles.infoTextLight
+                  ]}>
+                    Your email is safe and will never be shared
+                  </Text>
+                </View>
               </View>
-            ) : null}
-
-            {/* Info Text */}
-            <View style={styles.infoContainer}>
-              <Ionicons 
-                name="shield-checkmark-outline" 
-                size={13} 
-                color={isDark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(0, 0, 0, 0.45)'} 
-              />
-              <Text style={[
-                styles.infoText,
-                isDark ? styles.infoTextDark : styles.infoTextLight
-              ]}>
-                Your email is safe and will never be shared
-              </Text>
-            </View>
+            </ScrollView>
           </View>
-        </View>
-      </TouchableWithoutFeedback>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -189,8 +205,15 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
 const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
-    justifyContent: 'flex-end',
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  },
+  modalContainerInner: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'flex-end',
   },
   modalContent: {
     borderTopLeftRadius: 32,
@@ -203,6 +226,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 16,
     elevation: 12,
+    minHeight: 400,
   },
   modalContentDark: {
     backgroundColor: '#1F1F1F',

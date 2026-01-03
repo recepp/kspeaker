@@ -92,6 +92,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const [conversationModeType, setConversationModeType] = useState<string | null>(null); // conversation|teacher|beginner|casual_friend|strict|roleplay|business
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const scrollButtonAnim = useRef(new Animated.Value(0)).current;
   
@@ -1175,6 +1176,70 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         </View>
       )}
 
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
+            <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
+              <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('settings')}</Text>
+              <TouchableOpacity onPress={() => setShowSettingsModal(false)}>
+                <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              {/* Günlük Hatırlatıcı */}
+              <View style={styles.settingsItem}>
+                <View style={styles.settingsItemLeft}>
+                  <Ionicons name="notifications-outline" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'} />
+                  <Text style={[styles.settingsItemText, theme === 'light' && styles.settingsItemTextLight]}>
+                    Günlük Hatırlatıcı
+                  </Text>
+                </View>
+                <Switch
+                  value={notificationsEnabled}
+                  onValueChange={toggleNotifications}
+                  trackColor={{ false: '#767577', true: '#7DD3C0' }}
+                  thumbColor={notificationsEnabled ? '#FFFFFF' : '#f4f3f4'}
+                  ios_backgroundColor="#3e3e3e"
+                />
+              </View>
+              
+              <View style={styles.settingsDivider} />
+              
+              {/* Tema */}
+              <TouchableOpacity style={styles.settingsItem} onPress={toggleTheme}>
+                <View style={styles.settingsItemLeft}>
+                  <Ionicons name={theme === 'dark' ? 'sunny' : 'moon'} size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+                  <Text style={[styles.settingsItemText, theme === 'light' && styles.settingsItemTextLight]}>
+                    {theme === 'dark' ? getTranslation('lightMode') : getTranslation('darkMode')}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+              
+              <View style={styles.settingsDivider} />
+              
+              {/* Dil */}
+              <TouchableOpacity 
+                style={styles.settingsItem} 
+                onPress={() => {
+                  setShowSettingsModal(false);
+                  setShowLanguageModal(true);
+                }}
+              >
+                <View style={styles.settingsItemLeft}>
+                  <Ionicons name="language" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+                  <Text style={[styles.settingsItemText, theme === 'light' && styles.settingsItemTextLight]}>
+                    {getTranslation('language')}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* Language Modal */}
       {showLanguageModal && (
         <View style={styles.modalOverlay}>
@@ -1296,7 +1361,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         theme === 'light' && styles.drawerLight,
       ]}>
         <View style={styles.drawerContent}>
-          <TouchableOpacity style={styles.drawerItem}>
+          <TouchableOpacity style={styles.drawerItem} onPress={() => {
+            setShowSettingsModal(true);
+            toggleDrawer();
+          }}>
             <Ionicons name="settings-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('settings')}</Text>
           </TouchableOpacity>
@@ -1314,22 +1382,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
               {theme === 'dark' ? getTranslation('lightMode') : getTranslation('darkMode')}
             </Text>
           </TouchableOpacity>
-          
-          {/* Daily Reminders */}
-          <View style={styles.drawerDivider} />
-          <View style={styles.drawerItem}>
-            <Ionicons name="notifications-outline" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'} />
-            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { flex: 1, color: theme === 'dark' ? '#7DD3C0' : '#4A9B8F' }]}>
-              Günlük Hatırlatıcı
-            </Text>
-            <Switch
-              value={notificationsEnabled}
-              onValueChange={toggleNotifications}
-              trackColor={{ false: '#767577', true: '#7DD3C0' }}
-              thumbColor={notificationsEnabled ? '#FFFFFF' : '#f4f3f4'}
-              ios_backgroundColor="#3e3e3e"
-            />
-          </View>
           
           {/* Flash Cards */}
           <View style={styles.drawerDivider} />
@@ -2622,6 +2674,30 @@ const styles = StyleSheet.create({
   conversationModeHint: {
     fontSize: 11,
     color: 'rgba(6, 182, 212, 0.7)',
+  },
+  settingsItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+  },
+  settingsItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  settingsItemText: {
+    fontSize: 16,
+    color: '#ECECEC',
+    marginLeft: 12,
+  },
+  settingsItemTextLight: {
+    color: '#1A1A1F',
+  },
+  settingsDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginVertical: 4,
   },
 });
 
