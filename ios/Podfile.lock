@@ -2406,7 +2406,7 @@ PODS:
     - React-Core
   - RNDeviceInfo (14.1.1):
     - React-Core
-  - RNScreens (4.19.0):
+  - RNScreens (4.20.0):
     - boost
     - DoubleConversion
     - fast_float
@@ -2433,10 +2433,10 @@ PODS:
     - ReactCodegen
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
-    - RNScreens/common (= 4.19.0)
+    - RNScreens/common (= 4.20.0)
     - SocketRocket
     - Yoga
-  - RNScreens/common (4.19.0):
+  - RNScreens/common (4.20.0):
     - boost
     - DoubleConversion
     - fast_float
@@ -2465,7 +2465,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - SocketRocket
     - Yoga
-  - RNSentry (7.8.0):
+  - RNSentry (7.11.0):
     - boost
     - DoubleConversion
     - fast_float
@@ -2492,7 +2492,7 @@ PODS:
     - ReactCodegen
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
-    - Sentry/HybridSDK (= 8.57.3)
+    - Sentry/HybridSDK (= 8.58.0)
     - SocketRocket
     - Yoga
   - RNVectorIcons (10.3.0):
@@ -2523,7 +2523,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - SocketRocket
     - Yoga
-  - Sentry/HybridSDK (8.57.3)
+  - Sentry/HybridSDK (8.58.0)
   - SocketRocket (0.7.1)
   - TextToSpeech (4.1.1):
     - React-Core
@@ -2869,14 +2869,14 @@ SPEC CHECKSUMS:
   RNCAsyncStorage: 302f2fac014fd450046c120567ca364632da682b
   RNCPushNotificationIOS: b9dcb4f28c85f77483c3f86d2fcb1e0f0ab396fa
   RNDeviceInfo: 8b6fa8379062949dd79a009cf3d6b02a9c03ca59
-  RNScreens: 69f68c95d395bc4261d27c3aae7b4a458b947b7e
-  RNSentry: e999146ac397bcf2a8b823fb3a76167a71a8e046
+  RNScreens: b2a5c76af24a02a2fd71bfce42780fdd9c79cc6d
+  RNSentry: 45be9e9f3bbbf982ffe661f912954bc795f191a4
   RNVectorIcons: 6acc19c833be864e9c70894e101a587fe491150a
-  Sentry: c643eb180df401dd8c734c5036ddd9dd9218daa6
+  Sentry: d587a8fe91ca13503ecd69a1905f3e8a0fcf61be
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   TextToSpeech: 2b930ec3756afde499061f4f01ea895e1f75dccb
-  Yoga: a3ed390a19db0459bd6839823a6ac6d9c6db198d
+  Yoga: 922d794dce2af9c437f864bf4093abfa7a131adb
 
 PODFILE CHECKSUM: dfc6ec223e6a5a338d9d6edec33732a979588636
 
-COCOAPODS: 1.16.2
+COCOAPODS: 1.15.2

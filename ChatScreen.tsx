@@ -2,12 +2,14 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView, Switch, Alert } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { sendChatMessage, initializeApi, registerUser } from './api';
-import { checkRegistration, saveRegistration, clearRegistration } from './registration';
-import { EmailRegistrationModal } from './components/EmailRegistrationModal';
-import { startListening, stopListening } from './speech';
+import { sendChatMessage, initializeApi, registerUser, createVoucher } from './api';
+import { checkRegistration, saveRegistration, clearRegistration, saveVoucher, checkVoucher, canSendMessage, incrementMessageCount, getMessageCount } from './registration';
+import { VoucherModal } from './components/VoucherModal';
+import { PremiumSuccessModal } from './components/PremiumSuccessModal';
+import { startListening, stopListening, initializeVoice, destroyVoice } from './speech';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import Tts from 'react-native-tts';
+import ttsService from './services/ttsService';
+import EmailService from './services/emailService';
 import LinearGradient from 'react-native-linear-gradient';
 import { BlurView } from '@react-native-community/blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -34,34 +36,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const { width, height } = useWindowDimensions();
   const isTablet = width >= 768;
   
-  // Preprocess text for more natural TTS reading
-  const preprocessTextForTTS = (text: string): string => {
-    let processed = text;
-    
-    // Add pauses after sentences for better rhythm
-    processed = processed.replace(/\. /g, '. '); // Normalize periods
-    processed = processed.replace(/\! /g, '! '); // Normalize exclamations
-    processed = processed.replace(/\? /g, '? '); // Normalize questions
-    
-    // Add slight pauses after commas
-    processed = processed.replace(/\, /g, ', ');
-    
-    // Fix common abbreviations to sound natural
-    processed = processed.replace(/\bDr\./gi, 'Doctor');
-    processed = processed.replace(/\bMr\./gi, 'Mister');
-    processed = processed.replace(/\bMrs\./gi, 'Missus');
-    processed = processed.replace(/\bMs\./gi, 'Miss');
-    processed = processed.replace(/\bProf\./gi, 'Professor');
-    processed = processed.replace(/\be\.g\./gi, 'for example');
-    processed = processed.replace(/\bi\.e\./gi, 'that is');
-    processed = processed.replace(/\betc\./gi, 'et cetera');
-    
-    // Numbers: Spell out dates and percentages better
-    // (iOS TTS handles most numbers well)
-    
-    return processed.trim();
-  };
-  
   // Voice Conversation State - ChatGPT Style (IDLE → LISTENING → SPEAKING)
   type VoiceState = 'idle' | 'listening' | 'speaking' | 'processing';
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -69,7 +43,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Simple state - GPT style
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [showVoucherModal, setShowVoucherModal] = useState(false);
+  const [showPremiumSuccessModal, setShowPremiumSuccessModal] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isLoadingResponse, setIsLoadingResponse] = useState(false);
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
@@ -77,6 +52,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const [showAboutModal, setShowAboutModal] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [showFaqModal, setShowFaqModal] = useState(false); // ADIM 2: FAQ Modal
+  const [showSupportModal, setShowSupportModal] = useState(false); // ADIM 2: Support Modal
+  const [supportEmail, setSupportEmail] = useState('');
+  const [supportDescription, setSupportDescription] = useState('');
   const [errorMessage, setErrorMessage] = useState<string>(''); // Backend error message
   const [selectedLanguage, setSelectedLanguage] = useState<'en' | 'tr' | 'ar' | 'ru'>('en');
   const [quizMode, setQuizMode] = useState(false);
@@ -104,6 +83,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const voiceStateRef = useRef<VoiceState>('idle'); // Ref for closures
   const userStoppedVoice = useRef(false); // Track if user manually stopped voice
   const voiceRetryCount = useRef(0); // Track retry attempts
+  const isProcessingVoiceMessage = useRef(false); // CRITICAL: Prevent duplicate sends
   const drawerAnim = useRef(new Animated.Value(-280)).current;
   const shimmerAnim = useRef(new Animated.Value(0)).current;
   const micPulseAnim = useRef(new Animated.Value(1)).current;
@@ -361,7 +341,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Text send handler
   const handleSend = async () => {
     if (!input.trim() || isSending.current) return;
-    
+
+    const canSend = await canSendMessage();
+    if (!canSend) {
+      setShowVoucherModal(true);
+      return;
+    }
+
     isSending.current = true;
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -373,16 +359,16 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setInput('');
     Keyboard.dismiss();
     setIsLoadingResponse(true);
-    
+
     try {
       let reply = '';
-      
+
       // Roleplay mode logic
       if (roleplayMode && !roleplayScenario) {
         // Scenario selection
         if (['1', '2', '3', '4', '5'].includes(userInput)) {
           setRoleplayScenario(userInput);
-          
+
           // Map scenario numbers to specific roles
           const scenarioRoles: Record<string, string> = {
             '1': 'You are a hotel receptionist. I am checking into your hotel. Start by greeting me warmly and asking for my reservation details.',
@@ -391,7 +377,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
             '4': 'You are a doctor. I am a patient with health concerns. Start by greeting me and asking what brings me in today.',
             '5': 'You are a shop assistant at a clothing store. I am a customer looking for items. Start by greeting me and asking how you can help me today.',
           };
-          
+
           reply = await sendChatMessage(scenarioRoles[userInput], 'roleplay');
         } else {
           reply = 'Please type a number between 1-5 to select a roleplay scenario.';
@@ -417,7 +403,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         // Quiz in progress
         setQuizQuestionCount(prev => prev + 1);
         reply = await sendChatMessage(userInput, conversationModeType || undefined);
-        
+
         if (quizQuestionCount >= 4) {
           // Quiz finished after 5 questions
           setQuizMode(false);
@@ -428,7 +414,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         // Normal chat mode with conversation mode type
         reply = await sendChatMessage(userInput, conversationModeType || undefined);
       }
-      
+
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
@@ -436,21 +422,23 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       };
       setMessages(prev => [...prev, assistantMsg]);
       setTypingMessageId(assistantMsg.id);
-      
+
       // DON'T speak the reply in text mode - only speak in voice conversation mode
       // This prevents unwanted TTS when user types messages
       if (__DEV__) {
         console.log('[TTS] 🔇 Text message mode - TTS disabled');
       }
+
+      await incrementMessageCount();
     } catch (e: any) {
       if (__DEV__) {
         console.log('[Send] ⚠️ Request error:', e.message || e);
         console.log('[Send] ⚠️ Full error:', JSON.stringify(e));
       }
-      
+
       // Extract meaningful message from long backend errors
       let errorMsg = e.message || '';
-      
+
       // Check for network errors first
       if (errorMsg.includes('NETWORK_ERROR') || errorMsg.includes('Network request failed')) {
         if (__DEV__) console.log('[Send] Error type: NETWORK_ERROR');
@@ -478,7 +466,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         console.log('[Send] Error type: UNKNOWN - showing default');
         setErrorMessage(getTranslation('approvalMessage'));
       }
-      
+
       setShowApprovalModal(true);
       setMessages(prev => prev.slice(0, -1));
     } finally {
@@ -492,49 +480,68 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     if (!voiceText.trim() || isSending.current) {
       return;
     }
-    
+
+    const canSend = await canSendMessage();
+    if (!canSend) {
+      setShowVoucherModal(true);
+      return;
+    }
+
     console.log('[Voice] 📤 Sending:', voiceText);
     isSending.current = true;
-    
+
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
       content: voiceText.trim(),
     };
-    
+
     setMessages(prev => [...prev, userMsg]);
     setTypingMessageId(userMsg.id);
     setIsLoadingResponse(true);
-    
+
+    // CRITICAL: Stop listening during processing
+    try {
+      stopListening();
+      console.log('[Voice] 🛑 Stopped listening during processing');
+    } catch (e) {
+      console.log('[Voice] ⚠️ Listening already stopped');
+    }
+
     try {
       const reply = await sendChatMessage(voiceText.trim(), conversationModeType || undefined);
-      
+
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: reply,
       };
-      
+
       setMessages(prev => [...prev, assistantMsg]);
       setTypingMessageId(assistantMsg.id);
-      
-      // Speak the reply
+
+      // CRITICAL: Ensure we're in speaking state BEFORE starting TTS
+      console.log('[Voice] 🎙️ Preparing to speak response...');
+      setVoiceState('speaking');
+      voiceStateRef.current = 'speaking';
+
+      // Speak the reply - TTS will trigger state transitions via events
       setTimeout(() => {
-        const processedText = preprocessTextForTTS(reply);
-        console.log('[TTS] 🔊 Speaking reply');
-        Tts.speak(processedText);
-      }, 200);
-      
+        console.log('[TTS] 🔊 Starting speech playback');
+        ttsService.speak(reply);
+      }, 300); // Small delay to ensure state transition is complete
+
+      await incrementMessageCount();
     } catch (e: any) {
       console.log('[Voice] ⚠️ Error:', e.message);
       console.log('[Voice] ⚠️ Full error:', JSON.stringify(e));
-      
+
       // Stop conversation mode on error
       stopVoiceConversation();
-      
+
       // Extract meaningful message from long backend errors
       let errorMsg = e.message || '';
-      
+
       // Check for network errors first
       if (errorMsg.includes('NETWORK_ERROR') || errorMsg.includes('Network request failed')) {
         if (__DEV__) console.log('[Voice] Error type: NETWORK_ERROR');
@@ -562,7 +569,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         console.log('[Voice] Error type: UNKNOWN - showing default');
         setErrorMessage(getTranslation('approvalMessage'));
       }
-      
+
       setShowApprovalModal(true);
       setMessages(prev => prev.slice(0, -1));
     } finally {
@@ -574,9 +581,56 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Clear all messages
   const clearAll = () => {
     console.log('[Chat] 🗑️ Clearing all messages');
-    setMessages([]);
-    setInput('');
-    stopVoiceConversation();
+    
+    try {
+      // Clear timer first to prevent any pending operations
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+        silenceTimer.current = null;
+      }
+      
+      // Set manual stop flag to prevent any auto-restarts
+      userStoppedVoice.current = true;
+      
+      // Stop listening safely
+      try {
+        stopListening();
+      } catch (e) {
+        console.log('[Chat] Warning: Error stopping speech recognition:', e);
+      }
+      
+      // Stop speaking safely
+      try {
+        ttsService.stop();
+      } catch (e) {
+        console.log('[Chat] Warning: Error stopping TTS:', e);
+      }
+      
+      // Clear text
+      currentVoiceText.current = '';
+      
+      // Reset voice state
+      setVoiceState('idle');
+      voiceStateRef.current = 'idle';
+      
+      // Clear messages and input
+      setMessages([]);
+      setInput('');
+      
+      // Reset other states
+      setTypingMessageId(null);
+      setDisplayedText('');
+      setIsLoadingResponse(false);
+      
+      console.log('[Chat] ✅ Messages cleared successfully');
+    } catch (error) {
+      console.error('[Chat] ❌ Error in clearAll:', error);
+      // Even if there's an error, try to clear messages
+      setMessages([]);
+      setInput('');
+      setVoiceState('idle');
+      voiceStateRef.current = 'idle';
+    }
   };
 
   // Scroll to bottom
@@ -646,13 +700,76 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setTypingMessageId(assistantMsg.id);
   };
 
-  // Login: Reset registration to show email modal
-  const handleLogin = async () => {
-    console.log('[Login] Clearing registration...');
-    await clearRegistration();
-    setShowEmailModal(true);
-    closeDrawer();
-    console.log('[Login] Email modal opened for new login');
+  const handleVoucherSubmit = async (voucherCode: string) => {
+    console.log('[Voucher] 🎟️ Submitting voucher code...');
+    
+    // Call saveRegistration which will register with backend API
+    const success = await saveRegistration(voucherCode);
+    
+    if (success) {
+      console.log('[Voucher] ✅ Voucher successful! Showing premium popup...');
+      
+      // Show premium success modal after a short delay
+      setTimeout(() => {
+        setShowPremiumSuccessModal(true);
+      }, 500);
+    } else {
+      console.log('[Voucher] ❌ Voucher failed');
+    }
+    
+    return success;
+  };
+
+  // Reset to free tier for testing (DEV ONLY)
+  const resetToFreeTier = async () => {
+    try {
+      console.log('[Test] 🔄 Resetting to free tier...');
+      triggerHaptic('medium');
+      
+      // First check current message count
+      const currentCount = await getMessageCount();
+      const hasVoucher = await checkVoucher();
+      
+      Alert.alert(
+        '⚠️ Reset to Free Tier',
+        `Current Status:\n• Voucher: ${hasVoucher ? '✅ Active' : '❌ None'}\n• Messages today: ${currentCount}/∞\n\nThis will:\n• Remove premium access\n• Reset to 5 messages/day\n• Clear all voucher data\n\nAre you sure?`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Reset Now',
+            style: 'destructive',
+            onPress: async () => {
+              // Clear ALL registration data (voucher + message count)
+              const success = await clearRegistration();
+              
+              if (success) {
+                // Verify it's really cleared
+                const verifyVoucher = await checkVoucher();
+                const verifyCount = await getMessageCount();
+                
+                // Show success message with verification
+                Alert.alert(
+                  '✅ Reset Complete',
+                  `You are now on FREE TIER:\n\n✅ Voucher removed\n✅ Message count: ${verifyCount}/5 today\n\nYou can now test the 5-message limit!\n\nUse "🧪 Test Admin Voucher" to upgrade again.`,
+                  [{ text: 'Got it!', style: 'default' }]
+                );
+                
+                console.log('[Test] ✅ Successfully reset to free tier');
+                console.log('[Test] ✅ Verification - Voucher:', verifyVoucher, 'Count:', verifyCount);
+              } else {
+                Alert.alert('❌ Error', 'Failed to reset. Please try again.');
+              }
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('[Test] ❌ Reset error:', error);
+      Alert.alert('❌ Error', 'Failed to reset. Please try again.');
+    }
   };
 
   const getTranslation = (key: string) => {
@@ -697,12 +814,48 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       rateLimitTitle: { en: 'Too Many Requests', tr: 'Çok Fazla İstek', ar: 'طلبات كثيرة جدًا', ru: 'Слишком много запросов' },
       rateLimitMessage: { en: 'You are sending messages too quickly. Please wait a moment and try again.', tr: 'Çok hızlı mesaj gönderiyorsunuz. Lütfen bir dakika bekleyin ve tekrar deneyin.', ar: 'أنت ترسل الرسائل بسرعة كبيرة. يرجى الانتظار لحظة والمحاولة مرة أخرى.', ru: 'Вы отправляете сообщения слишком быстро. Подождите немного и попробуйте снова.' },
       understood: { en: 'Understood', tr: 'Anladım', ar: 'مفهوم', ru: 'Понятно' },
+      
+      // FAQ & Support Translations
+      faq: { en: 'FAQ', tr: 'Sık Sorulanlar', ar: 'الأسئلة الشائعة', ru: 'Часто задаваемые вопросы' },
+      support: { en: 'Support', tr: 'Destek', ar: 'الدعم', ru: 'Поддержка' },
+      
+      // FAQ Questions
+      faqQ1: { en: 'How do I use voice conversation mode?', tr: 'Sesli sohbet modunu nasıl kullanırım?', ar: 'كيف أستخدم وضع المحادثة الصوتية؟', ru: 'Как использовать режим голосового разговора?' },
+      faqA1: { en: 'Tap the microphone button to start voice conversation. Speak naturally, and the AI will respond with voice. Tap the stop button to end the conversation.', tr: 'Sesli sohbeti başlatmak için mikrofon düğmesine dokunun. Doğal konuşun, yapay zeka sesle yanıt verecek. Sohbeti bitirmek için dur düğmesine dokunun.', ar: 'اضغط على زر الميكروفون لبدء المحادثة الصوتية. تحدث بشكل طبيعي، وسيستجيب الذكاء الاصطناعي بالصوت. اضغط على زر الإيقاف لإنهاء المحادثة.', ru: 'Нажмите кнопку микрофона, чтобы начать голосовой разговор. Говорите естественно, и ИИ ответит голосом. Нажмите кнопку остановки, чтобы завершить разговор.' },
+      
+      faqQ2: { en: 'What are conversation modes?', tr: 'Sohbet modları nedir?', ar: 'ما هي أوضاع المحادثة؟', ru: 'Что такое режимы разговора?' },
+      faqA2: { en: 'Conversation modes (Teacher, Beginner, Business, etc.) adjust the AI\'s teaching style. Tap the \'+\' button and select \'Mode\' to choose one.', tr: 'Sohbet modları (Öğretmen, Başlangıç, İş vb.) yapay zekanın öğretim stilini ayarlar. \'+\' düğmesine dokunun ve birini seçmek için \'Mod\'u seçin.', ar: 'تقوم أوضاع المحادثة (المعلم، المبتدئ، الأعمال، إلخ) بضبط أسلوب تدريس الذكاء الاصطناعي. اضغط على زر \'+\' وحدد \'الوضع\' لاختيار واحد.', ru: 'Режимы разговора (Учитель, Начинающий, Бизнес и т.д.) настраивают стиль обучения ИИ. Нажмите кнопку \'+\' и выберите \'Режим\'.' },
+      
+      faqQ3: { en: 'How does the message limit work?', tr: 'Mesaj limiti nasıl çalışır?', ar: 'كيف يعمل حد الرسائل؟', ru: 'Как работает лимит сообщений?' },
+      faqA3: { en: 'Free users get 5 messages per day. Premium users (with voucher) get unlimited messages. The limit resets daily at midnight.', tr: 'Ücretsiz kullanıcılar günde 5 mesaj alır. Premium kullanıcılar (kupon ile) sınırsız mesaj alır. Limit her gece yarısı sıfırlanır.', ar: 'يحصل المستخدمون المجانيون على 5 رسائل يوميًا. يحصل المستخدمون المميزون (بالقسيمة) على رسائل غير محدودة. يتم إعادة تعيين الحد يوميًا في منتصف الليل.', ru: 'Бесплатные пользователи получают 5 сообщений в день. Премиум-пользователи (с ваучером) получают неограниченное количество сообщений. Лимит сбрасывается ежедневно в полночь.' },
+      
+      faqQ4: { en: 'What is a voucher code?', tr: 'Kupon kodu nedir?', ar: 'ما هو رمز القسيمة؟', ru: 'Что такое код ваучера?' },
+      faqA4: { en: 'A voucher code gives you premium access with unlimited messages. Enter it in the drawer menu under \'Add Voucher\'.', tr: 'Kupon kodu size sınırsız mesajla premium erişim sağlar. \'Kupon Ekle\' altındaki çekmece menüsüne girin.', ar: 'يمنحك رمز القسيمة وصولاً مميزًا مع رسائل غير محدودة. أدخله في قائمة الدرج تحت \'إضافة قسيمة\'.', ru: 'Код ваучера дает вам премиум-доступ с неограниченным количеством сообщений. Введите его в меню выдвижного ящика в разделе \'Добавить ваучер\'.' },
+      
+      faqQ5: { en: 'Can I use this app offline?', tr: 'Bu uygulamayı çevrimdışı kullanabilir miyim?', ar: 'هل يمكنني استخدام هذا التطبيق دون اتصال بالإنترنت؟', ru: 'Могу ли я использовать это приложение офлайн?' },
+      faqA5: { en: 'No, Kspeaker requires an internet connection to communicate with the AI. Voice recognition and text-to-speech also need connectivity.', tr: 'Hayır, Kspeaker yapay zeka ile iletişim kurmak için internet bağlantısı gerektirir. Ses tanıma ve metinden konuşmaya da bağlantı gerekir.', ar: 'لا، يتطلب Kspeaker اتصالاً بالإنترنت للتواصل مع الذكاء الاصطناعي. يحتاج التعرف على الصوت والنص إلى الكلام أيضًا إلى الاتصال.', ru: 'Нет, Kspeaker требует подключения к Интернету для связи с ИИ. Распознавание речи и синтез речи также требуют подключения.' },
+      
+      faqQ6: { en: 'How do I enable daily reminders?', tr: 'Günlük hatırlatıcıları nasıl etkinleştiririm?', ar: 'كيف أقوم بتمكين التذكيرات اليومية؟', ru: 'Как включить ежедневные напоминания?' },
+      faqA6: { en: 'Go to Settings (drawer menu) and toggle \'Daily Reminder\'. You\'ll get a notification every day to practice English.', tr: 'Ayarlar\'a gidin (çekmece menüsü) ve \'Günlük Hatırlatıcı\'yı açın. Her gün İngilizce pratik yapmak için bildirim alacaksınız.', ar: 'انتقل إلى الإعدادات (قائمة الدرج) وقم بتبديل \'التذكير اليومي\'. ستحصل على إشعار كل يوم لممارسة اللغة الإنجليزية.', ru: 'Перейдите в Настройки (меню выдвижного ящика) и включите \'Ежедневное напоминание\'. Вы будете получать уведомления каждый день для практики английского.' },
+      
+      // Support Form
+      supportEmailLabel: { en: 'Email Address', tr: 'E-posta Adresi', ar: 'عنوان البريد الإلكتروني', ru: 'Адрес электронной почты' },
+      supportEmailPlaceholder: { en: 'your.email@example.com', tr: 'email@ornek.com', ar: 'بريدك@مثال.com', ru: 'ваш.email@example.com' },
+      supportDescLabel: { en: 'Description', tr: 'Açıklama', ar: 'الوصف', ru: 'Описание' },
+      supportDescPlaceholder: { en: 'Describe your issue or question...', tr: 'Sorununuzu veya sorunuzu açıklayın...', ar: 'صف مشكلتك أو سؤالك...', ru: 'Опишите вашу проблему или вопрос...' },
+      supportCharCount: { en: 'characters', tr: 'karakter', ar: 'حرف', ru: 'символов' },
+      supportSendButton: { en: 'Send Message', tr: 'Mesaj Gönder', ar: 'إرسال رسالة', ru: 'Отправить сообщение' },
+      supportInvalidEmail: { en: 'Invalid Email', tr: 'Geçersiz E-posta', ar: 'بريد إلكتروني غير صالح', ru: 'Неверный email' },
+      supportInvalidEmailMsg: { en: 'Please enter a valid email address.', tr: 'Lütfen geçerli bir e-posta adresi girin.', ar: 'يرجى إدخال عنوان بريد إلكتروني صالح.', ru: 'Пожалуйста, введите действительный адрес электронной почты.' },
+      supportSuccessTitle: { en: '✅ Message Sent', tr: '✅ Mesaj Gönderildi', ar: '✅ تم إرسال الرسالة', ru: '✅ Сообщение отправлено' },
+      supportSuccessMsg: { en: 'Thank you for contacting us! We will respond to your email within 24-48 hours.', tr: 'Bizimle iletişime geçtiğiniz için teşekkür ederiz! E-postanıza 24-48 saat içinde yanıt vereceğiz.', ar: 'شكرًا لاتصالك بنا! سنرد على بريدك الإلكتروني في غضون 24-48 ساعة.', ru: 'Спасибо, что связались с нами! Мы ответим на ваш email в течение 24-48 часов.' },
+      ok: { en: 'OK', tr: 'Tamam', ar: 'حسنًا', ru: 'ОК' },
     };
     return translations[key]?.[selectedLanguage] || translations[key]?.en || key;
   };
 
   // ========================================
-  // VOICE CONVERSATION SYSTEM - ChatGPT Style
+  // VOICE CONVERSATION SYSTEM - ChatGPT Style (OPTIMIZED)
   // ========================================
   
   // State machine: idle → listening → processing → speaking → listening (loop)
@@ -719,86 +872,180 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       voiceRetryCount.current = 0;
     }
     
+    // CRITICAL FIX: Clear accumulated text on fresh start
     currentVoiceText.current = '';
+    console.log('[Voice] 🧹 Cleared accumulated text');
+    
+    // Clear any existing silence timer
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
+      silenceTimer.current = null;
+    }
     
     let hasReceivedText = false;
-    
-    const resetTimer = () => {
-      if (silenceTimer.current) {
-        clearTimeout(silenceTimer.current);
-      }
-      
-      // 2 second silence after we get text
-      const timeout = hasReceivedText ? 2000 : 6000;
-      
-      silenceTimer.current = setTimeout(() => {
-        const text = currentVoiceText.current.trim();
-        
-        if (text.length > 0 && voiceStateRef.current === 'listening') {
-          if (__DEV__) console.log('[Voice] ✅ Silence detected, processing:', text);
-          stopListening();
-          setVoiceState('processing');
-          voiceStateRef.current = 'processing';
-          sendVoiceMessage(text);
-          currentVoiceText.current = '';
-        } else {
-          if (__DEV__) console.log('[Voice] ⏸️ Silence but no text, restarting...');
-          // Only restart if still NOT idle AND user hasn't manually stopped
-          if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-            stopListening();
-            setTimeout(() => {
-              // Double-check: only restart if STILL listening and not manually stopped
-              if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-                startVoiceConversation(true); // Pass true to indicate retry
-              }
-            }, 500);
-          }
-        }
-      }, timeout);
-    };
+    let lastTextTimestamp = Date.now();
     
     startListening(
       (text) => {
-        // On speech result
-        currentVoiceText.current = text;
+        // On speech result - ALWAYS update
+        console.log('[Voice] 🎤 Received text:', text, `(length: ${text.length})`);
         
-        if (!hasReceivedText) {
-          hasReceivedText = true;
-          console.log('[Voice] 🎤 First text received');
-        }
+        // CRITICAL FIX: ALWAYS update currentVoiceText, don't check length
+        const trimmedText = text.trim();
+        currentVoiceText.current = trimmedText;
+        console.log('[Voice] 💾 Stored in currentVoiceText.current:', trimmedText);
         
-        resetTimer();
-      },
-      () => {
-        // On error - don't try to JSON.stringify the error object, it crashes!
-        console.log('[Voice] ❌ Speech recognition error occurred');
+        // Update timestamp
+        lastTextTimestamp = Date.now();
         
+        // CRITICAL FIX: Reset silence timer on every text update
         if (silenceTimer.current) {
           clearTimeout(silenceTimer.current);
           silenceTimer.current = null;
         }
         
-        // LIMIT RETRIES - max 2 attempts to prevent infinite loop
+        // Start new silence timer (3 seconds)
+        if (trimmedText.length > 0 && voiceStateRef.current === 'listening') {
+          console.log('[Voice] ⏱️ Starting 3-second silence timer...');
+          silenceTimer.current = setTimeout(() => {
+            console.log('[Voice] 🔕 3 seconds of silence detected - processing text');
+            
+            // CRITICAL: Check if already processing
+            if (isProcessingVoiceMessage.current) {
+              console.log('[Voice] ⚠️ Already processing voice message, skipping duplicate send');
+              return;
+            }
+            
+            const finalText = currentVoiceText.current.trim();
+            const wordCount = finalText.split(/\s+/).filter(w => w.length > 0).length;
+            
+            console.log('[Voice] 📝 Final text after silence:', finalText, `(${wordCount} words)`);
+            
+            if (finalText.length > 0 && wordCount >= 1 && voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+              console.log('[Voice] ✅ Auto-sending after silence timeout');
+              
+              // CRITICAL: Set processing flag BEFORE sending
+              isProcessingVoiceMessage.current = true;
+              
+              // Set to processing state
+              setVoiceState('processing');
+              voiceStateRef.current = 'processing';
+              
+              // Send message
+              sendVoiceMessage(finalText);
+              
+              // Clear accumulated text
+              currentVoiceText.current = '';
+              console.log('[Voice] 🧹 Cleared accumulated text after sending');
+              
+              // Reset flag after 1 second (enough time for native event to be ignored)
+              setTimeout(() => {
+                isProcessingVoiceMessage.current = false;
+                console.log('[Voice] 🔓 Processing flag reset');
+              }, 1000);
+            }
+          }, 3000); // 3 seconds of silence
+        }
+        
+        if (!hasReceivedText && trimmedText.length > 0) {
+          hasReceivedText = true;
+          console.log('[Voice] 🎤 First text received');
+        }
+      },
+      () => {
+        // On error
+        console.log('[Voice] ❌ Speech recognition error occurred');
+        
+        // Clear silence timer on error
+        if (silenceTimer.current) {
+          clearTimeout(silenceTimer.current);
+          silenceTimer.current = null;
+        }
+        
         voiceRetryCount.current++;
-        if (voiceRetryCount.current >= 3) {
-          console.log('[Voice] 🛑 Max retries reached (3), stopping voice mode');
+        const maxRetries = 5;
+        
+        if (voiceRetryCount.current >= maxRetries) {
+          console.log(`[Voice] 🛑 Max retries reached (${maxRetries}), stopping voice mode`);
           stopVoiceConversation();
+          
+          Alert.alert(
+            'Voice Recognition Issue',
+            'Having trouble with speech recognition. Please check your microphone permissions or try again later.',
+            [{ text: 'OK', style: 'default' }]
+          );
           return;
         }
         
         // Only retry if still in listening state AND user hasn't manually stopped
         setTimeout(() => {
           if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-            console.log('[Voice] 🔄 Retrying after error... (attempt', voiceRetryCount.current, '/3)');
-            startVoiceConversation(true); // Pass true to indicate retry
+            console.log(`[Voice] 🔄 Retrying after error... (attempt ${voiceRetryCount.current}/${maxRetries})`);
+            startVoiceConversation(true);
           } else {
             console.log('[Voice] 🛑 Not retrying - user stopped or state changed');
           }
-        }, 1000);
+        }, 800);
+      },
+      () => {
+        // On speech end (native iOS event) - FALLBACK
+        console.log('[Voice] 🛑 Speech ended callback triggered (native event)');
+        
+        // Clear silence timer since native event fired
+        if (silenceTimer.current) {
+          clearTimeout(silenceTimer.current);
+          silenceTimer.current = null;
+          console.log('[Voice] 🧹 Cleared silence timer (native event fired)');
+        }
+        
+        const text = currentVoiceText.current.trim();
+        const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+        
+        console.log('[Voice] 📝 Accumulated text:', text, `(${wordCount} words)`);
+        console.log('[Voice] 🔍 Current state:', voiceStateRef.current);
+        console.log('[Voice] 🔍 User stopped:', userStoppedVoice.current);
+        
+        if (text.length > 0 && wordCount >= 1 && voiceStateRef.current === 'listening') {
+          console.log('[Voice] ✅ Processing text from native event:', text);
+          
+          // Set to processing state
+          setVoiceState('processing');
+          voiceStateRef.current = 'processing';
+          
+          // Send message
+          sendVoiceMessage(text);
+          
+          // Clear accumulated text
+          currentVoiceText.current = '';
+          console.log('[Voice] 🧹 Cleared accumulated text after sending');
+        } else if (text.length > 0 && wordCount < 1) {
+          console.log('[Voice] ⚠️ Text too short, ignoring:', text);
+          currentVoiceText.current = '';
+          
+          // Restart listening
+          if (!userStoppedVoice.current) {
+            setTimeout(() => {
+              if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+                console.log('[Voice] 🔄 Restarting listening after short text...');
+                startVoiceConversation(true);
+              }
+            }, 300);
+          }
+        } else {
+          console.log('[Voice] ⏸️ No text accumulated or wrong state, restarting...');
+          
+          // Restart listening if no text
+          if (!userStoppedVoice.current && voiceStateRef.current === 'listening') {
+            setTimeout(() => {
+              if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+                console.log('[Voice] 🔄 Restarting listening after no text...');
+                startVoiceConversation(true);
+              }
+            }, 300);
+          }
+        }
       }
     );
-    
-    resetTimer();
   };
   
   const stopVoiceConversation = () => {
@@ -813,11 +1060,19 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       silenceTimer.current = null;
     }
     
-    // Stop listening
-    stopListening();
+    // Stop listening safely with try-catch
+    try {
+      stopListening();
+    } catch (error) {
+      console.log('[Voice] ⚠️ Error stopping listening:', error);
+    }
     
-    // Stop speaking
-    Tts.stop();
+    // Stop speaking safely with try-catch
+    try {
+      ttsService.stop();
+    } catch (error) {
+      console.log('[Voice] ⚠️ Error stopping TTS:', error);
+    }
     
     // Clear text
     currentVoiceText.current = '';
@@ -850,10 +1105,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // TTS Events - Integrated with voice conversation
   useEffect(() => {
     console.log('[TTS] 🔧 Initializing TTS with premium neural voice');
-    Tts.setDefaultLanguage('en-US');
+    ttsService.setDefaultLanguage('en-US');
     
     // Get and select best quality voice
-    Tts.voices().then((voices: any[]) => {
+    ttsService.voices().then((voices: any[]) => {
       console.log('[TTS] 📢 Available voices:', voices.length);
       
       // Log all voices for debugging (helps identify best voice)
@@ -925,31 +1180,31 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       
       if (selectedVoice) {
         console.log(`[TTS] 🎯 FINAL SELECTION: ${selectedVoice.name} (Quality: ${selectedVoice.quality})`);
-        Tts.setDefaultVoice(selectedVoice.id);
+        ttsService.setDefaultVoice(selectedVoice.id);
       }
       
       // CRITICAL: Speech parameters for human-like, non-robotic speech
       // Lower rate = more natural with better prosody and emphasis
       // Pitch variations handled by premium voices automatically
-      Tts.setDefaultRate(0.50);     // Optimal conversational speed (0.40-0.55 range)
-      Tts.setDefaultPitch(1.0);     // Natural pitch (0.5-2.0 range, 1.0 = normal)
+      ttsService.setDefaultRate(0.50);     // Optimal conversational speed (0.40-0.55 range)
+      ttsService.setDefaultPitch(1.0);     // Natural pitch (0.5-2.0 range, 1.0 = normal)
       
       // iOS specific: Set high quality audio
       if (Platform.OS === 'ios') {
-        Tts.setDucking(true);       // Duck other audio when speaking
-        Tts.setIgnoreSilentSwitch('ignore'); // Play even if silent switch is on
+        ttsService.setDucking(true);       // Duck other audio when speaking
+        ttsService.setIgnoreSilentSwitch('ignore'); // Play even if silent switch is on
       }
       
       console.log('[TTS] 🎚️ Speech params: Rate=0.50, Pitch=1.0, Ducking=ON');
-    });
+    }); // FIXED: Added missing closing parenthesis for .then() callback
     
-    Tts.addEventListener('tts-start', () => {
+    ttsService.addEventListener('tts-start', () => {
       console.log('[TTS] 🔊 Started speaking');
       setVoiceState('speaking');
       voiceStateRef.current = 'speaking';
     });
     
-    Tts.addEventListener('tts-finish', () => {
+    ttsService.addEventListener('tts-finish', () => {
       console.log('[TTS] ✅ Finished speaking');
       
       // Auto-restart listening only if still speaking AND user hasn't manually stopped
@@ -965,15 +1220,15 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       }
     });
     
-    Tts.addEventListener('tts-cancel', () => {
+    ttsService.addEventListener('tts-cancel', () => {
       console.log('[TTS] ⛔ Cancelled');
       // Don't auto-restart, user stopped it
     });
 
     return () => {
-      Tts.removeAllListeners('tts-start');
-      Tts.removeAllListeners('tts-finish');
-      Tts.removeAllListeners('tts-cancel');
+      ttsService.removeAllListeners('tts-start');
+      ttsService.removeAllListeners('tts-finish');
+      ttsService.removeAllListeners('tts-cancel');
     };
   }, []); // Empty deps - setup only once
 
@@ -981,11 +1236,35 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   useEffect(() => {
     const init = async () => {
       await initializeApi();
+      initializeVoice();
+      
+      // Check if device is already registered
       const registered = await checkRegistration();
+      console.log('[Init] Registration check:', registered);
+      
+      // If NOT registered, automatically register device without voucher (free tier)
       if (!registered) {
-        setShowEmailModal(true);
+        console.log('[Init] 📱 Auto-registering device (free tier)...');
+        try {
+          const success = await registerUser(); // No voucher = free tier
+          if (success) {
+            console.log('[Init] ✅ Device registered successfully (free tier)');
+            // Save to local storage so we don't register again
+            await saveRegistration('FREE_TIER');
+          } else {
+            console.log('[Init] ⚠️ Device registration failed');
+          }
+        } catch (error) {
+          console.error('[Init] ❌ Registration error:', error);
+        }
+      } else {
+        console.log('[Init] ✅ Device already registered');
       }
       
+      // Check if user can send messages
+      const canSend = await canSendMessage();
+      console.log('[Init] Can send message:', canSend);
+
       // Bildirim durumunu yükle veya ilk kez açılıyorsa otomatik aç
       try {
         const notifEnabled = await AsyncStorage.getItem('notificationsEnabled');
@@ -1013,6 +1292,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       if (silenceTimer.current) {
         clearTimeout(silenceTimer.current);
       }
+      destroyVoice();
     };
   }, []);
 
@@ -1026,15 +1306,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       });
     }
   }, [messages.length]);
-
-  const handleEmailSubmit = async (email: string) => {
-    const success = await registerUser(email);
-    if (success) {
-      await saveRegistration(email);
-      setShowEmailModal(false);
-    }
-    return success;
-  };
 
   const renderSkeletonLoader = () => {
     const shimmerTranslate = shimmerAnim.interpolate({
@@ -1098,7 +1369,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 style={styles.contextMenuItem}
                 onPress={() => {
                   triggerHaptic('light');
-                  Tts.speak(item.content);
+                  ttsService.speak(item.content);
                   setMessageContextMenu(null);
                 }}
               >
@@ -1122,7 +1393,11 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
 
   return (
     <SafeAreaView style={[styles.container, theme === 'light' && styles.containerLight]} edges={['top', 'bottom']}>
-      <EmailRegistrationModal visible={showEmailModal} onSubmit={handleEmailSubmit} />
+      <VoucherModal 
+        visible={showVoucherModal} 
+        onSubmit={handleVoucherSubmit}
+        onClose={() => setShowVoucherModal(false)}
+      />
 
       {/* About Modal */}
       {showAboutModal && (
@@ -1346,6 +1621,203 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         </View>
       )}
 
+      {/* ADIM 3: FAQ Modal */}
+      {showFaqModal && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
+            <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
+              <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('faq')}</Text>
+              <TouchableOpacity onPress={() => setShowFaqModal(false)}>
+                <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              {/* FAQ Item 1 */}
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {getTranslation('faqQ1')}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {getTranslation('faqA1')}
+                </Text>
+              </View>
+
+              {/* FAQ Item 2 */}
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {getTranslation('faqQ2')}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {getTranslation('faqA2')}
+                </Text>
+              </View>
+
+              {/* FAQ Item 3 */}
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {getTranslation('faqQ3')}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {getTranslation('faqA3')}
+                </Text>
+              </View>
+
+              {/* FAQ Item 4 */}
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {getTranslation('faqQ4')}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {getTranslation('faqA4')}
+                </Text>
+              </View>
+
+              {/* FAQ Item 5 */}
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {getTranslation('faqQ5')}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {getTranslation('faqA5')}
+                </Text>
+              </View>
+
+              {/* FAQ Item 6 */}
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {getTranslation('faqQ6')}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {getTranslation('faqA6')}
+                </Text>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      )}
+
+      {/* ADIM 3: Support Modal */}
+      {showSupportModal && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
+            <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
+              <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('support')}</Text>
+              <TouchableOpacity onPress={() => {
+                setShowSupportModal(false);
+                setSupportEmail('');
+                setSupportDescription('');
+              }}>
+                <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              <Text style={[styles.supportLabel, theme === 'light' && styles.supportLabelLight]}>
+                {getTranslation('supportEmailLabel')}
+              </Text>
+              <TextInput
+                style={[styles.supportInput, theme === 'light' && styles.supportInputLight]}
+                value={supportEmail}
+                onChangeText={setSupportEmail}
+                placeholder={getTranslation('supportEmailPlaceholder')}
+                placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              <Text style={[styles.supportLabel, theme === 'light' && styles.supportLabelLight, { marginTop: 20 }]}>
+                {getTranslation('supportDescLabel')}
+              </Text>
+              <TextInput
+                style={[styles.supportTextarea, theme === 'light' && styles.supportTextareaLight]}
+                value={supportDescription}
+                onChangeText={(text) => {
+                  // Limit to 500 characters
+                  if (text.length <= 500) {
+                    setSupportDescription(text);
+                  }
+                }}
+                placeholder={getTranslation('supportDescPlaceholder')}
+                placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                multiline
+                numberOfLines={8}
+                maxLength={500}
+                textAlignVertical="top"
+              />
+              <Text style={[styles.characterCount, theme === 'light' && styles.characterCountLight]}>
+                {supportDescription.length}/500 {getTranslation('supportCharCount')}
+              </Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.supportButton,
+                  (!supportEmail.trim() || !supportDescription.trim()) && styles.supportButtonDisabled
+                ]}
+                onPress={async () => {
+                  if (supportEmail.trim() && supportDescription.trim()) {
+                    // Email validation
+                    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                    if (!emailRegex.test(supportEmail.trim())) {
+                      Alert.alert(getTranslation('supportInvalidEmail'), getTranslation('supportInvalidEmailMsg'));
+                      return;
+                    }
+
+                    try {
+                      // Send support email
+                      const result = await EmailService.sendSupportEmail(supportEmail, supportDescription);
+
+                      if (result.success) {
+                        // Show success message
+                        Alert.alert(
+                          getTranslation('supportSuccessTitle'),
+                          getTranslation('supportSuccessMsg'),
+                          [{ 
+                            text: getTranslation('ok'), 
+                            onPress: () => {
+                              setShowSupportModal(false);
+                              setSupportEmail('');
+                              setSupportDescription('');
+                            }
+                          }]
+                        );
+                      } else {
+                        // Show error message
+                        Alert.alert('❌ Error', result.error || 'Failed to send support message. Please try again later.');
+                      }
+                    } catch (error) {
+                      console.error('[Support] ❌ Error sending support message:', error);
+                      Alert.alert('❌ Error', 'Failed to send support message. Please try again later.');
+                    }
+                  }
+                }}
+                disabled={!supportEmail.trim() || !supportDescription.trim()}
+              >
+                <Ionicons name="send" size={20} color="#FFFFFF" />
+                <Text style={styles.supportButtonText}>{getTranslation('supportSendButton')}</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      )}
+
       {/* Drawer Menu */}
       {drawerOpen && (
         <TouchableOpacity 
@@ -1372,6 +1844,25 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
             <Ionicons name="information-circle-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('about')}</Text>
           </TouchableOpacity>
+          
+          {/* ADIM 2: FAQ Button */}
+          <TouchableOpacity style={styles.drawerItem} onPress={() => {
+            closeDrawer();
+            setTimeout(() => setShowFaqModal(true), 300);
+          }}>
+            <Ionicons name="help-circle-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('faq')}</Text>
+          </TouchableOpacity>
+          
+          {/* ADIM 2: Support Button */}
+          <TouchableOpacity style={styles.drawerItem} onPress={() => {
+            closeDrawer();
+            setTimeout(() => setShowSupportModal(true), 300);
+          }}>
+            <Ionicons name="mail-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('support')}</Text>
+          </TouchableOpacity>
+          
           <TouchableOpacity style={styles.drawerItem} onPress={openLanguageModal}>
             <Ionicons name="language" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('language')}</Text>
@@ -1385,6 +1876,90 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           
           {/* Flash Cards */}
           <View style={styles.drawerDivider} />
+          
+          {/* Test Admin Voucher - REMOVED (kept for dev reference but disabled) */}
+          {false && __DEV__ && (
+            <TouchableOpacity 
+              style={styles.drawerItem} 
+              onPress={async () => {
+                toggleDrawer();
+                triggerHaptic('medium');
+                
+                try {
+                  console.log('[Admin] 🎟️ Creating test voucher...');
+                  Alert.alert('⏳ Creating Voucher...', 'Please wait...');
+                  
+                  // Create voucher with 1 month expiry
+                  const expiresAt = new Date();
+                  expiresAt.setMonth(expiresAt.getMonth() + 1);
+                  
+                  const voucherCode = await createVoucher(expiresAt.toISOString());
+                  
+                  if (voucherCode) {
+                    console.log('[Admin] ✅ Voucher created:', voucherCode);
+                    
+                    // Automatically register with this voucher
+                    const success = await saveRegistration(voucherCode);
+                    
+                    if (success) {
+                      Alert.alert(
+                        '🎉 Premium Activated!',
+                        `Voucher Code: ${voucherCode}\n\nYou now have unlimited messages! The voucher has been automatically applied.`,
+                        [{ text: 'Awesome!', style: 'default' }]
+                      );
+                    } else {
+                      Alert.alert(
+                        '⚠️ Voucher Created',
+                        `Code: ${voucherCode}\n\nVoucher created but registration failed. Try adding it manually from "Add Voucher" menu.`,
+                        [{ text: 'OK' }]
+                      );
+                    }
+                  } else {
+                    Alert.alert('❌ Error', 'Failed to create voucher. Check backend connection.');
+                  }
+                } catch (error: any) {
+                  console.error('[Admin] ❌ Voucher creation error:', error);
+                  Alert.alert('❌ Error', error.message || 'Failed to create voucher');
+                }
+              }}
+            >
+              <Ionicons name="gift-outline" size={24} color={theme === 'dark' ? '#10B981' : '#059669'} />
+              <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#10B981' : '#059669' }]}>
+                🧪 Test Admin Voucher
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Reset to Free Tier - REMOVED (kept for dev reference but disabled) */}
+          {false && __DEV__ && (
+            <TouchableOpacity 
+              style={styles.drawerItem} 
+              onPress={() => {
+                toggleDrawer();
+                resetToFreeTier();
+              }}
+            >
+              <Ionicons name="refresh-outline" size={24} color={theme === 'dark' ? '#F59E0B' : '#D97706'} />
+              <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#F59E0B' : '#D97706' }]}>
+                🔄 Reset to Free Tier
+              </Text>
+            </TouchableOpacity>
+          )}
+          
+          {/* Add Voucher */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            onPress={() => {
+              toggleDrawer();
+              setTimeout(() => setShowVoucherModal(true), 300);
+            }}
+          >
+            <Ionicons name="ticket-outline" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#7DD3C0' : '#4A9B8F' }]}>
+              Add Voucher
+            </Text>
+          </TouchableOpacity>
+          
           <TouchableOpacity 
             style={styles.drawerItem} 
             onPress={() => {
@@ -1396,15 +1971,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
             <Ionicons name="layers-outline" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#7DD3C0' : '#4A9B8F' }]}>
               Flash Cards
-            </Text>
-          </TouchableOpacity>
-          
-          {/* Login */}
-          <View style={styles.drawerDivider} />
-          <TouchableOpacity style={styles.drawerItem} onPress={handleLogin}>
-            <Ionicons name="log-in-outline" size={24} color={theme === 'dark' ? '#4ECDC4' : '#2E8B8B'} />
-            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#4ECDC4' : '#2E8B8B' }]}>
-              {getTranslation('login')}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1538,8 +2104,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                             setTypingMessageId(assistantMsg.id);
                             
                             // Speak the intro
-                            const processedText = preprocessTextForTTS(roleplayIntro);
-                            Tts.speak(processedText);
+                            ttsService.speak(roleplayIntro);
                           } catch (error) {
                             console.log('[Roleplay] Error loading intro:', error);
                             setRoleplayMode(false);
@@ -2311,10 +2876,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#404040',
+    marginBottom: 20,
   },
   modalHeaderLight: {
     borderBottomColor: '#E5E5E5',
@@ -2698,6 +3260,93 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     marginVertical: 4,
+  },
+  faqItem: {
+    marginBottom: 20,
+  },
+  faqQuestion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 10,
+  },
+  faqQuestionText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ECECEC',
+  },
+  faqQuestionTextLight: {
+    color: '#1A1A1F',
+  },
+  faqAnswer: {
+    fontSize: 15,
+    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 22,
+  },
+  faqAnswerLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
+  },
+  supportLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ECECEC',
+    marginBottom: 8,
+  },
+  supportLabelLight: {
+    color: '#1A1A1F',
+  },
+  supportInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: '#ECECEC',
+  },
+  supportInputLight: {
+    backgroundColor: 'rgba(0, 0, 0, 0.03)',
+    color: '#1A1A1F',
+  },
+  supportTextarea: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: '#ECECEC',
+    textAlignVertical: 'top',
+  },
+  supportTextareaLight: {
+    backgroundColor: 'rgba(0, 0, 0, 0.03)',
+    color: '#1A1A1F',
+  },
+  characterCount: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.6)',
+    textAlign: 'right',
+    marginTop: 4,
+  },
+  characterCountLight: {
+    color: 'rgba(0, 0, 0, 0.4)',
+  },
+  supportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4A6FA5',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginTop: 20,
+    gap: 8,
+  },
+  supportButtonDisabled: {
+    backgroundColor: 'rgba(74, 111, 165, 0.5)',
+  },
+  supportButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 });
 
