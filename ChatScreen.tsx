@@ -1,19 +1,17 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView, Switch, Alert } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView, Switch, Alert, Modal, Pressable, PermissionsAndroid, Linking } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { sendChatMessage, initializeApi, registerUser, createVoucher } from './api';
-import { checkRegistration, saveRegistration, clearRegistration, saveVoucher, checkVoucher, canSendMessage, incrementMessageCount, getMessageCount } from './registration';
-import { VoucherModal } from './components/VoucherModal';
-import { PremiumSuccessModal } from './components/PremiumSuccessModal';
-import { startListening, stopListening, initializeVoice, destroyVoice } from './speech';
+import { sendChatMessage, initializeApi, registerUser } from './api';
+import { checkRegistration, saveRegistration, clearRegistration } from './registration';
+import { startListening, stopListening } from './speech';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import ttsService from './services/ttsService';
-import EmailService from './services/emailService';
+import Tts from 'react-native-tts';
 import LinearGradient from 'react-native-linear-gradient';
 import { BlurView } from '@react-native-community/blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NotificationService from './notificationService';
+import { logError, logInfo, logWarning } from './logger';
 
 type Theme = 'dark' | 'light';
 type Role = 'user' | 'assistant';
@@ -36,6 +34,34 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const { width, height } = useWindowDimensions();
   const isTablet = width >= 768;
   
+  // Preprocess text for more natural TTS reading
+  const preprocessTextForTTS = (text: string): string => {
+    let processed = text;
+    
+    // Add pauses after sentences for better rhythm
+    processed = processed.replace(/\. /g, '. '); // Normalize periods
+    processed = processed.replace(/\! /g, '! '); // Normalize exclamations
+    processed = processed.replace(/\? /g, '? '); // Normalize questions
+    
+    // Add slight pauses after commas
+    processed = processed.replace(/\, /g, ', ');
+    
+    // Fix common abbreviations to sound natural
+    processed = processed.replace(/\bDr\./gi, 'Doctor');
+    processed = processed.replace(/\bMr\./gi, 'Mister');
+    processed = processed.replace(/\bMrs\./gi, 'Missus');
+    processed = processed.replace(/\bMs\./gi, 'Miss');
+    processed = processed.replace(/\bProf\./gi, 'Professor');
+    processed = processed.replace(/\be\.g\./gi, 'for example');
+    processed = processed.replace(/\bi\.e\./gi, 'that is');
+    processed = processed.replace(/\betc\./gi, 'et cetera');
+    
+    // Numbers: Spell out dates and percentages better
+    // (iOS TTS handles most numbers well)
+    
+    return processed.trim();
+  };
+  
   // Voice Conversation State - ChatGPT Style (IDLE → LISTENING → SPEAKING)
   type VoiceState = 'idle' | 'listening' | 'speaking' | 'processing';
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -43,19 +69,18 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Simple state - GPT style
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [showVoucherModal, setShowVoucherModal] = useState(false);
-  const [showPremiumSuccessModal, setShowPremiumSuccessModal] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isLoadingResponse, setIsLoadingResponse] = useState(false);
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
   const [displayedText, setDisplayedText] = useState('');
   const [showAboutModal, setShowAboutModal] = useState(false);
+  const [showFaqModal, setShowFaqModal] = useState(false);
+  const [showSupportModal, setShowSupportModal] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
-  const [showFaqModal, setShowFaqModal] = useState(false); // ADIM 2: FAQ Modal
-  const [showSupportModal, setShowSupportModal] = useState(false); // ADIM 2: Support Modal
   const [supportEmail, setSupportEmail] = useState('');
-  const [supportDescription, setSupportDescription] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
+  const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>(''); // Backend error message
   const [selectedLanguage, setSelectedLanguage] = useState<'en' | 'tr' | 'ar' | 'ru'>('en');
   const [quizMode, setQuizMode] = useState(false);
@@ -72,6 +97,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const scrollButtonAnim = useRef(new Animated.Value(0)).current;
   
@@ -83,7 +109,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const voiceStateRef = useRef<VoiceState>('idle'); // Ref for closures
   const userStoppedVoice = useRef(false); // Track if user manually stopped voice
   const voiceRetryCount = useRef(0); // Track retry attempts
-  const isProcessingVoiceMessage = useRef(false); // CRITICAL: Prevent duplicate sends
   const drawerAnim = useRef(new Animated.Value(-280)).current;
   const shimmerAnim = useRef(new Animated.Value(0)).current;
   const micPulseAnim = useRef(new Animated.Value(1)).current;
@@ -99,7 +124,32 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
   }, [voiceState]);
 
-  // Load theme and language from storage
+  // Keyboard event listeners
+  useEffect(() => {
+    const keyboardWillShow = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setKeyboardHeight(e.endCoordinates.height);
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    );
+    
+    const keyboardWillHide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setKeyboardHeight(0);
+      }
+    );
+    
+    return () => {
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
+    };
+  }, []);
+
+  // Load theme, language and auto-register on app start
   useEffect(() => {
     const loadTheme = async () => {
       try {
@@ -124,8 +174,37 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       }
     };
     
+    const autoRegister = async () => {
+      try {
+        // Initialize API first
+        await initializeApi();
+        
+        // Check if already registered
+        const registration = await checkRegistration();
+        if (registration) {
+          console.log('[Registration] Already registered');
+          return;
+        }
+        
+        // Auto-register without email/voucher (free tier)
+        console.log('[Registration] Auto-registering device...');
+        const success = await registerUser();
+        
+        if (success) {
+          // Save registration locally
+          await saveRegistration('');
+          console.log('[Registration] Auto-registration successful');
+        } else {
+          console.error('[Registration] Auto-registration failed');
+        }
+      } catch (error) {
+        console.error('[Registration] Auto-registration error:', error);
+      }
+    };
+    
     loadTheme();
     loadLanguage();
+    autoRegister();
   }, []);
 
   // Dil değiştiğinde bildirimleri güncelle
@@ -156,65 +235,134 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
   };
 
+  // Check Android notification permission (Android 13+)
+  const checkAndroidNotificationPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    
+    try {
+      // Android 13+ (API 33+) requires runtime permission
+      if (Platform.Version >= 33) {
+        const granted = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        );
+        console.log('[Notifications] 🔔 Android permission check:', granted);
+        return granted;
+      }
+      return true; // Android < 13 doesn't require runtime permission
+    } catch (error) {
+      console.error('[Notifications] ❌ Permission check error:', error);
+      return false;
+    }
+  };
+
+  // Request Android notification permission (Android 13+)
+  const requestAndroidNotificationPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    
+    try {
+      // Android 13+ (API 33+) requires runtime permission
+      if (Platform.Version >= 33) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        );
+        console.log('[Notifications] 📲 Android permission request result:', granted);
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      }
+      return true; // Android < 13 doesn't require runtime permission
+    } catch (error) {
+      console.error('[Notifications] ❌ Permission request error:', error);
+      return false;
+    }
+  };
+
   // Toggle notifications
   const toggleNotifications = async () => {
     const newValue = !notificationsEnabled;
-    setNotificationsEnabled(newValue);
     
     try {
       if (newValue) {
-        console.log('[Notifications] 📲 Requesting permissions...');
-        // Bildirim izni iste
-        const permissions = await NotificationService.requestPermissions();
-        console.log('[Notifications] 📲 Permission result:', permissions);
+        console.log('[Notifications] 📲 Enabling notifications...');
         
-        if (permissions) {
-          console.log('[Notifications] ✅ Permission granted, scheduling...');
-          
-          // Günlük hatırlatıcıları seçili dilde ayarla
+        // Android 13+ için önce izin kontrolü yap
+        const hasPermission = await checkAndroidNotificationPermission();
+        
+        if (hasPermission) {
+          // İzin zaten verilmiş, direkt aktif et
+          console.log('[Notifications] ✅ Permission already granted');
+          setNotificationsEnabled(true);
           NotificationService.scheduleDailyReminders(selectedLanguage);
+          await AsyncStorage.setItem('notificationsEnabled', 'true');
           
-          // Zamanlanmış bildirimleri kontrol et
           setTimeout(() => {
             NotificationService.checkScheduledNotifications();
           }, 1000);
           
-          // Bildirim metnini seçili dile göre al
           const notificationText = NotificationService.getNotificationText(selectedLanguage);
-          
           Alert.alert(
             notificationText.title,
             notificationText.message,
             [{ text: notificationText.button, style: 'default' }]
           );
         } else {
-          console.log('[Notifications] ❌ Permission denied');
-          setNotificationsEnabled(false);
-          Alert.alert(
-            'İzin Gerekli',
-            'Bildirimler için lütfen ayarlardan izin verin.',
-            [{ text: 'Tamam' }]
-          );
+          // İzin yok, iste
+          console.log('[Notifications] 📲 Requesting permission...');
+          const granted = await requestAndroidNotificationPermission();
+          
+          if (granted) {
+            console.log('[Notifications] ✅ Permission granted, scheduling...');
+            setNotificationsEnabled(true);
+            NotificationService.scheduleDailyReminders(selectedLanguage);
+            await AsyncStorage.setItem('notificationsEnabled', 'true');
+            
+            setTimeout(() => {
+              NotificationService.checkScheduledNotifications();
+            }, 1000);
+            
+            const notificationText = NotificationService.getNotificationText(selectedLanguage);
+            Alert.alert(
+              notificationText.title,
+              notificationText.message,
+              [{ text: notificationText.button, style: 'default' }]
+            );
+          } else {
+            console.log('[Notifications] ❌ Permission denied');
+            setNotificationsEnabled(false);
+            Alert.alert(
+              'İzin Gerekli',
+              'Bildirimler için lütfen ayarlardan izin verin.',
+              [{ text: 'Tamam' }]
+            );
+          }
         }
       } else {
         // Bildirimleri kapat
         console.log('[Notifications] 🔕 Disabling notifications...');
+        setNotificationsEnabled(false);
         NotificationService.cancelAllNotifications();
+        await AsyncStorage.setItem('notificationsEnabled', 'false');
         Alert.alert('🔕 Bildirimler Kapatıldı', 'Artık hatırlatma almayacaksın.');
       }
-      
-      await AsyncStorage.setItem('notificationsEnabled', JSON.stringify(newValue));
     } catch (error) {
       console.error('[Notifications] ❌ Error:', error);
       setNotificationsEnabled(false);
     }
   };
 
-  // Haptic feedback helper
+  // Haptic feedback helper - Cross-platform (Single Responsibility Principle)
   const triggerHaptic = (type: 'light' | 'medium' | 'heavy' = 'light') => {
-    if (Platform.OS === 'ios') {
-      const duration = type === 'light' ? 10 : type === 'medium' ? 20 : 30;
-      Vibration.vibrate(duration);
+    try {
+      if (Platform.OS === 'ios') {
+        // iOS: Short, precise vibrations
+        const duration = type === 'light' ? 10 : type === 'medium' ? 20 : 30;
+        Vibration.vibrate(duration);
+      } else if (Platform.OS === 'android') {
+        // Android: Vibration patterns for better feedback
+        const pattern = type === 'light' ? [0, 50] : type === 'medium' ? [0, 100] : [0, 150];
+        Vibration.vibrate(pattern);
+      }
+    } catch (error) {
+      // Graceful fallback if vibration permission denied
+      console.log('[Haptic] Vibration not available:', error);
     }
   };
 
@@ -341,13 +489,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Text send handler
   const handleSend = async () => {
     if (!input.trim() || isSending.current) return;
-
-    const canSend = await canSendMessage();
-    if (!canSend) {
-      setShowVoucherModal(true);
-      return;
-    }
-
+    
     isSending.current = true;
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -359,16 +501,16 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setInput('');
     Keyboard.dismiss();
     setIsLoadingResponse(true);
-
+    
     try {
       let reply = '';
-
+      
       // Roleplay mode logic
       if (roleplayMode && !roleplayScenario) {
         // Scenario selection
         if (['1', '2', '3', '4', '5'].includes(userInput)) {
           setRoleplayScenario(userInput);
-
+          
           // Map scenario numbers to specific roles
           const scenarioRoles: Record<string, string> = {
             '1': 'You are a hotel receptionist. I am checking into your hotel. Start by greeting me warmly and asking for my reservation details.',
@@ -377,7 +519,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
             '4': 'You are a doctor. I am a patient with health concerns. Start by greeting me and asking what brings me in today.',
             '5': 'You are a shop assistant at a clothing store. I am a customer looking for items. Start by greeting me and asking how you can help me today.',
           };
-
+          
           reply = await sendChatMessage(scenarioRoles[userInput], 'roleplay');
         } else {
           reply = 'Please type a number between 1-5 to select a roleplay scenario.';
@@ -403,7 +545,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         // Quiz in progress
         setQuizQuestionCount(prev => prev + 1);
         reply = await sendChatMessage(userInput, conversationModeType || undefined);
-
+        
         if (quizQuestionCount >= 4) {
           // Quiz finished after 5 questions
           setQuizMode(false);
@@ -414,7 +556,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         // Normal chat mode with conversation mode type
         reply = await sendChatMessage(userInput, conversationModeType || undefined);
       }
-
+      
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
@@ -422,27 +564,31 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       };
       setMessages(prev => [...prev, assistantMsg]);
       setTypingMessageId(assistantMsg.id);
-
+      
       // DON'T speak the reply in text mode - only speak in voice conversation mode
       // This prevents unwanted TTS when user types messages
       if (__DEV__) {
         console.log('[TTS] 🔇 Text message mode - TTS disabled');
       }
-
-      await incrementMessageCount();
     } catch (e: any) {
       if (__DEV__) {
         console.log('[Send] ⚠️ Request error:', e.message || e);
         console.log('[Send] ⚠️ Full error:', JSON.stringify(e));
       }
-
+      
       // Extract meaningful message from long backend errors
       let errorMsg = e.message || '';
-
+      
       // Check for network errors first
       if (errorMsg.includes('NETWORK_ERROR') || errorMsg.includes('Network request failed')) {
         if (__DEV__) console.log('[Send] Error type: NETWORK_ERROR');
         setErrorMessage(getTranslation('networkError'));
+      } else if (errorMsg.includes('SERVICE_UNAVAILABLE') || errorMsg.includes('503')) {
+        console.log('[Send] Error type: SERVICE_UNAVAILABLE (503)');
+        setErrorMessage(getTranslation('serviceUnavailable'));
+      } else if (errorMsg.includes('SERVER_ERROR') || errorMsg.includes('500') || errorMsg.includes('502') || errorMsg.includes('504')) {
+        console.log('[Send] Error type: SERVER_ERROR (5xx)');
+        setErrorMessage(getTranslation('serverError'));
       } else if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Quota') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
         console.log('[Send] Error type: QUOTA_EXCEEDED (Gemini API)');
         setErrorMessage(getTranslation('quotaMessage'));
@@ -466,7 +612,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         console.log('[Send] Error type: UNKNOWN - showing default');
         setErrorMessage(getTranslation('approvalMessage'));
       }
-
+      
       setShowApprovalModal(true);
       setMessages(prev => prev.slice(0, -1));
     } finally {
@@ -480,72 +626,59 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     if (!voiceText.trim() || isSending.current) {
       return;
     }
-
-    const canSend = await canSendMessage();
-    if (!canSend) {
-      setShowVoucherModal(true);
-      return;
-    }
-
+    
     console.log('[Voice] 📤 Sending:', voiceText);
     isSending.current = true;
-
+    
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
       content: voiceText.trim(),
     };
-
+    
     setMessages(prev => [...prev, userMsg]);
     setTypingMessageId(userMsg.id);
     setIsLoadingResponse(true);
-
-    // CRITICAL: Stop listening during processing
-    try {
-      stopListening();
-      console.log('[Voice] 🛑 Stopped listening during processing');
-    } catch (e) {
-      console.log('[Voice] ⚠️ Listening already stopped');
-    }
-
+    
     try {
       const reply = await sendChatMessage(voiceText.trim(), conversationModeType || undefined);
-
+      
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: reply,
       };
-
+      
       setMessages(prev => [...prev, assistantMsg]);
       setTypingMessageId(assistantMsg.id);
-
-      // CRITICAL: Ensure we're in speaking state BEFORE starting TTS
-      console.log('[Voice] 🎙️ Preparing to speak response...');
-      setVoiceState('speaking');
-      voiceStateRef.current = 'speaking';
-
-      // Speak the reply - TTS will trigger state transitions via events
+      
+      // Speak the reply
       setTimeout(() => {
-        console.log('[TTS] 🔊 Starting speech playback');
-        ttsService.speak(reply);
-      }, 300); // Small delay to ensure state transition is complete
-
-      await incrementMessageCount();
+        const processedText = preprocessTextForTTS(reply);
+        console.log('[TTS] 🔊 Speaking reply');
+        Tts.speak(processedText);
+      }, 200);
+      
     } catch (e: any) {
       console.log('[Voice] ⚠️ Error:', e.message);
       console.log('[Voice] ⚠️ Full error:', JSON.stringify(e));
-
+      
       // Stop conversation mode on error
       stopVoiceConversation();
-
+      
       // Extract meaningful message from long backend errors
       let errorMsg = e.message || '';
-
+      
       // Check for network errors first
       if (errorMsg.includes('NETWORK_ERROR') || errorMsg.includes('Network request failed')) {
         if (__DEV__) console.log('[Voice] Error type: NETWORK_ERROR');
         setErrorMessage(getTranslation('networkError'));
+      } else if (errorMsg.includes('SERVICE_UNAVAILABLE') || errorMsg.includes('503')) {
+        console.log('[Voice] Error type: SERVICE_UNAVAILABLE (503)');
+        setErrorMessage(getTranslation('serviceUnavailable'));
+      } else if (errorMsg.includes('SERVER_ERROR') || errorMsg.includes('500') || errorMsg.includes('502') || errorMsg.includes('504')) {
+        console.log('[Voice] Error type: SERVER_ERROR (5xx)');
+        setErrorMessage(getTranslation('serverError'));
       } else if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Quota') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
         console.log('[Voice] Error type: QUOTA_EXCEEDED (Gemini API)');
         setErrorMessage(getTranslation('quotaMessage'));
@@ -569,7 +702,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         console.log('[Voice] Error type: UNKNOWN - showing default');
         setErrorMessage(getTranslation('approvalMessage'));
       }
-
+      
       setShowApprovalModal(true);
       setMessages(prev => prev.slice(0, -1));
     } finally {
@@ -581,56 +714,9 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Clear all messages
   const clearAll = () => {
     console.log('[Chat] 🗑️ Clearing all messages');
-    
-    try {
-      // Clear timer first to prevent any pending operations
-      if (silenceTimer.current) {
-        clearTimeout(silenceTimer.current);
-        silenceTimer.current = null;
-      }
-      
-      // Set manual stop flag to prevent any auto-restarts
-      userStoppedVoice.current = true;
-      
-      // Stop listening safely
-      try {
-        stopListening();
-      } catch (e) {
-        console.log('[Chat] Warning: Error stopping speech recognition:', e);
-      }
-      
-      // Stop speaking safely
-      try {
-        ttsService.stop();
-      } catch (e) {
-        console.log('[Chat] Warning: Error stopping TTS:', e);
-      }
-      
-      // Clear text
-      currentVoiceText.current = '';
-      
-      // Reset voice state
-      setVoiceState('idle');
-      voiceStateRef.current = 'idle';
-      
-      // Clear messages and input
-      setMessages([]);
-      setInput('');
-      
-      // Reset other states
-      setTypingMessageId(null);
-      setDisplayedText('');
-      setIsLoadingResponse(false);
-      
-      console.log('[Chat] ✅ Messages cleared successfully');
-    } catch (error) {
-      console.error('[Chat] ❌ Error in clearAll:', error);
-      // Even if there's an error, try to clear messages
-      setMessages([]);
-      setInput('');
-      setVoiceState('idle');
-      voiceStateRef.current = 'idle';
-    }
+    setMessages([]);
+    setInput('');
+    stopVoiceConversation();
   };
 
   // Scroll to bottom
@@ -639,8 +725,9 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     flatListRef.current?.scrollToEnd({ animated: true });
   };
 
-  // Drawer functions
+  // Drawer functions (Open/Closed Principle - easy to extend)
   const toggleDrawer = () => {
+    triggerHaptic('light'); // Haptic feedback on drawer toggle
     const toValue = drawerOpen ? -280 : 0;
     Animated.timing(drawerAnim, {
       toValue,
@@ -666,9 +753,24 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setTimeout(() => setShowAboutModal(true), 300);
   };
 
+  const openFaqModal = () => {
+    closeDrawer();
+    setTimeout(() => setShowFaqModal(true), 300);
+  };
+
+  const openSupportModal = () => {
+    closeDrawer();
+    setTimeout(() => setShowSupportModal(true), 300);
+  };
+
   const openLanguageModal = () => {
     closeDrawer();
     setTimeout(() => setShowLanguageModal(true), 300);
+  };
+
+  const openVoucherModal = () => {
+    closeDrawer();
+    setTimeout(() => setShowVoucherModal(true), 300);
   };
 
   const selectLanguage = async (lang: 'en' | 'tr' | 'ar' | 'ru') => {
@@ -700,84 +802,15 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setTypingMessageId(assistantMsg.id);
   };
 
-  const handleVoucherSubmit = async (voucherCode: string) => {
-    console.log('[Voucher] 🎟️ Submitting voucher code...');
-    
-    // Call saveRegistration which will register with backend API
-    const success = await saveRegistration(voucherCode);
-    
-    if (success) {
-      console.log('[Voucher] ✅ Voucher successful! Showing premium popup...');
-      
-      // Show premium success modal after a short delay
-      setTimeout(() => {
-        setShowPremiumSuccessModal(true);
-      }, 500);
-    } else {
-      console.log('[Voucher] ❌ Voucher failed');
-    }
-    
-    return success;
-  };
-
-  // Reset to free tier for testing (DEV ONLY)
-  const resetToFreeTier = async () => {
-    try {
-      console.log('[Test] 🔄 Resetting to free tier...');
-      triggerHaptic('medium');
-      
-      // First check current message count
-      const currentCount = await getMessageCount();
-      const hasVoucher = await checkVoucher();
-      
-      Alert.alert(
-        '⚠️ Reset to Free Tier',
-        `Current Status:\n• Voucher: ${hasVoucher ? '✅ Active' : '❌ None'}\n• Messages today: ${currentCount}/∞\n\nThis will:\n• Remove premium access\n• Reset to 5 messages/day\n• Clear all voucher data\n\nAre you sure?`,
-        [
-          {
-            text: 'Cancel',
-            style: 'cancel'
-          },
-          {
-            text: 'Reset Now',
-            style: 'destructive',
-            onPress: async () => {
-              // Clear ALL registration data (voucher + message count)
-              const success = await clearRegistration();
-              
-              if (success) {
-                // Verify it's really cleared
-                const verifyVoucher = await checkVoucher();
-                const verifyCount = await getMessageCount();
-                
-                // Show success message with verification
-                Alert.alert(
-                  '✅ Reset Complete',
-                  `You are now on FREE TIER:\n\n✅ Voucher removed\n✅ Message count: ${verifyCount}/5 today\n\nYou can now test the 5-message limit!\n\nUse "🧪 Test Admin Voucher" to upgrade again.`,
-                  [{ text: 'Got it!', style: 'default' }]
-                );
-                
-                console.log('[Test] ✅ Successfully reset to free tier');
-                console.log('[Test] ✅ Verification - Voucher:', verifyVoucher, 'Count:', verifyCount);
-              } else {
-                Alert.alert('❌ Error', 'Failed to reset. Please try again.');
-              }
-            }
-          }
-        ]
-      );
-    } catch (error) {
-      console.error('[Test] ❌ Reset error:', error);
-      Alert.alert('❌ Error', 'Failed to reset. Please try again.');
-    }
-  };
-
   const getTranslation = (key: string) => {
     const translations: { [key: string]: { en: string; tr: string; ar: string; ru: string } } = {
       menu: { en: 'Menu', tr: 'Menü', ar: 'قائمة', ru: 'Меню' },
       settings: { en: 'Settings', tr: 'Ayarlar', ar: 'الإعدادات', ru: 'Настройки' },
       about: { en: 'About Kspeaker', tr: 'Kspeaker Hakkında', ar: 'حول Kspeaker', ru: 'О Kspeaker' },
+      faq: { en: 'FAQ', tr: 'Sık Sorulan Sorular', ar: 'الأسئلة الشائعة', ru: 'Часто задаваемые вопросы' },
+      support: { en: 'Support', tr: 'Destek', ar: 'الدعم', ru: 'Поддержка' },
       language: { en: 'Language', tr: 'Dil', ar: 'اللغة', ru: 'Язык' },
+      addVoucher: { en: 'Add Voucher', tr: 'Kupon Ekle', ar: 'إضافة قسيمة', ru: 'Добавить ваучер' },
       login: { en: 'Login', tr: 'Giriş Yap', ar: 'تسجيل الدخول', ru: 'Войти' },
       askKspeaker: { en: 'Ask Kspeaker...', tr: 'Kspeaker\'a sor...', ar: 'اسأل Kspeaker...', ru: 'Спросите Kspeaker...' },
       startConversation: { en: 'Start a conversation', tr: 'Sohbete başla', ar: 'ابدأ محادثة', ru: 'Начать разговор' },
@@ -809,53 +842,19 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       networkError: { en: 'No internet connection. Please check your network.', tr: 'İnternet bağlantısı yok. Lütfen ağınızı kontrol edin.', ar: 'لا يوجد اتصال بالإنترنت. يرجى فحص شبكتك.', ru: 'Нет интернет-соединения. Проверьте сеть.' },
       waitingApproval: { en: 'Service Temporarily Unavailable', tr: 'Servis Geçici Olarak Kullanılamıyor', ar: 'الخدمة غير متاحة مؤقتًا', ru: 'Сервис временно недоступен' },
       approvalMessage: { en: 'Our AI service is currently experiencing high demand. Please try again in a few moments.', tr: 'AI hizmetimiz şu anda yoğun talep yaşıyor. Lütfen birkaç dakika sonra tekrar deneyin.', ar: 'تواجه خدمة الذكاء الاصطناعي لدينا طلبًا كبيرًا حاليًا. يرجى المحاولة مرة أخرى بعد لحظات.', ru: 'Наш сервис ИИ в настоящее время испытывает высокий спрос. Попробуйте еще раз через несколько минут.' },
+      serviceUnavailable: { en: 'Backend service is temporarily unavailable. Please try again in a few minutes.', tr: 'Backend servisi geçici olarak kullanılamıyor. Lütfen birkaç dakika sonra tekrar deneyin.', ar: 'خدمة الخادم غير متاحة مؤقتًا. يرجى المحاولة مرة أخرى بعد بضع دقائق.', ru: 'Серверная служба временно недоступна. Попробуйте снова через несколько минут.' },
+      serverError: { en: 'Server error occurred. Our team has been notified. Please try again later.', tr: 'Sunucu hatası oluştu. Ekibimiz bilgilendirildi. Lütfen daha sonra tekrar deneyin.', ar: 'حدث خطأ في الخادم. تم إخطار فريقنا. يرجى المحاولة مرة أخرى لاحقًا.', ru: 'Произошла ошибка сервера. Наша команда уведомлена. Попробуйте позже.' },
       quotaExceeded: { en: 'Service Usage Limit Reached', tr: 'Servis Kullanım Limiti Doldu', ar: 'تم الوصول إلى حد استخدام الخدمة', ru: 'Достигнут лимит использования' },
       quotaMessage: { en: 'The AI service is currently at capacity. Please try again in a few minutes. We apologize for the inconvenience!', tr: 'AI servisi şu anda kapasite limitinde. Lütfen birkaç dakika sonra tekrar deneyin. Rahatsızlıktan dolayı özür dileriz!', ar: 'خدمة الذكاء الاصطناعي في السعة حاليًا. يرجى المحاولة مرة أخرى بعد بضع دقائق. نعتذر عن الإزعاج!', ru: 'Сервис ИИ в данный момент на пределе мощности. Попробуйте через несколько минут. Приносим извинения!' },
       rateLimitTitle: { en: 'Too Many Requests', tr: 'Çok Fazla İstek', ar: 'طلبات كثيرة جدًا', ru: 'Слишком много запросов' },
       rateLimitMessage: { en: 'You are sending messages too quickly. Please wait a moment and try again.', tr: 'Çok hızlı mesaj gönderiyorsunuz. Lütfen bir dakika bekleyin ve tekrar deneyin.', ar: 'أنت ترسل الرسائل بسرعة كبيرة. يرجى الانتظار لحظة والمحاولة مرة أخرى.', ru: 'Вы отправляете сообщения слишком быстро. Подождите немного и попробуйте снова.' },
       understood: { en: 'Understood', tr: 'Anladım', ar: 'مفهوم', ru: 'Понятно' },
-      
-      // FAQ & Support Translations
-      faq: { en: 'FAQ', tr: 'Sık Sorulanlar', ar: 'الأسئلة الشائعة', ru: 'Часто задаваемые вопросы' },
-      support: { en: 'Support', tr: 'Destek', ar: 'الدعم', ru: 'Поддержка' },
-      
-      // FAQ Questions
-      faqQ1: { en: 'How do I use voice conversation mode?', tr: 'Sesli sohbet modunu nasıl kullanırım?', ar: 'كيف أستخدم وضع المحادثة الصوتية؟', ru: 'Как использовать режим голосового разговора?' },
-      faqA1: { en: 'Tap the microphone button to start voice conversation. Speak naturally, and the AI will respond with voice. Tap the stop button to end the conversation.', tr: 'Sesli sohbeti başlatmak için mikrofon düğmesine dokunun. Doğal konuşun, yapay zeka sesle yanıt verecek. Sohbeti bitirmek için dur düğmesine dokunun.', ar: 'اضغط على زر الميكروفون لبدء المحادثة الصوتية. تحدث بشكل طبيعي، وسيستجيب الذكاء الاصطناعي بالصوت. اضغط على زر الإيقاف لإنهاء المحادثة.', ru: 'Нажмите кнопку микрофона, чтобы начать голосовой разговор. Говорите естественно, и ИИ ответит голосом. Нажмите кнопку остановки, чтобы завершить разговор.' },
-      
-      faqQ2: { en: 'What are conversation modes?', tr: 'Sohbet modları nedir?', ar: 'ما هي أوضاع المحادثة؟', ru: 'Что такое режимы разговора?' },
-      faqA2: { en: 'Conversation modes (Teacher, Beginner, Business, etc.) adjust the AI\'s teaching style. Tap the \'+\' button and select \'Mode\' to choose one.', tr: 'Sohbet modları (Öğretmen, Başlangıç, İş vb.) yapay zekanın öğretim stilini ayarlar. \'+\' düğmesine dokunun ve birini seçmek için \'Mod\'u seçin.', ar: 'تقوم أوضاع المحادثة (المعلم، المبتدئ، الأعمال، إلخ) بضبط أسلوب تدريس الذكاء الاصطناعي. اضغط على زر \'+\' وحدد \'الوضع\' لاختيار واحد.', ru: 'Режимы разговора (Учитель, Начинающий, Бизнес и т.д.) настраивают стиль обучения ИИ. Нажмите кнопку \'+\' и выберите \'Режим\'.' },
-      
-      faqQ3: { en: 'How does the message limit work?', tr: 'Mesaj limiti nasıl çalışır?', ar: 'كيف يعمل حد الرسائل؟', ru: 'Как работает лимит сообщений?' },
-      faqA3: { en: 'Free users get 5 messages per day. Premium users (with voucher) get unlimited messages. The limit resets daily at midnight.', tr: 'Ücretsiz kullanıcılar günde 5 mesaj alır. Premium kullanıcılar (kupon ile) sınırsız mesaj alır. Limit her gece yarısı sıfırlanır.', ar: 'يحصل المستخدمون المجانيون على 5 رسائل يوميًا. يحصل المستخدمون المميزون (بالقسيمة) على رسائل غير محدودة. يتم إعادة تعيين الحد يوميًا في منتصف الليل.', ru: 'Бесплатные пользователи получают 5 сообщений в день. Премиум-пользователи (с ваучером) получают неограниченное количество сообщений. Лимит сбрасывается ежедневно в полночь.' },
-      
-      faqQ4: { en: 'What is a voucher code?', tr: 'Kupon kodu nedir?', ar: 'ما هو رمز القسيمة؟', ru: 'Что такое код ваучера?' },
-      faqA4: { en: 'A voucher code gives you premium access with unlimited messages. Enter it in the drawer menu under \'Add Voucher\'.', tr: 'Kupon kodu size sınırsız mesajla premium erişim sağlar. \'Kupon Ekle\' altındaki çekmece menüsüne girin.', ar: 'يمنحك رمز القسيمة وصولاً مميزًا مع رسائل غير محدودة. أدخله في قائمة الدرج تحت \'إضافة قسيمة\'.', ru: 'Код ваучера дает вам премиум-доступ с неограниченным количеством сообщений. Введите его в меню выдвижного ящика в разделе \'Добавить ваучер\'.' },
-      
-      faqQ5: { en: 'Can I use this app offline?', tr: 'Bu uygulamayı çevrimdışı kullanabilir miyim?', ar: 'هل يمكنني استخدام هذا التطبيق دون اتصال بالإنترنت؟', ru: 'Могу ли я использовать это приложение офлайн?' },
-      faqA5: { en: 'No, Kspeaker requires an internet connection to communicate with the AI. Voice recognition and text-to-speech also need connectivity.', tr: 'Hayır, Kspeaker yapay zeka ile iletişim kurmak için internet bağlantısı gerektirir. Ses tanıma ve metinden konuşmaya da bağlantı gerekir.', ar: 'لا، يتطلب Kspeaker اتصالاً بالإنترنت للتواصل مع الذكاء الاصطناعي. يحتاج التعرف على الصوت والنص إلى الكلام أيضًا إلى الاتصال.', ru: 'Нет, Kspeaker требует подключения к Интернету для связи с ИИ. Распознавание речи и синтез речи также требуют подключения.' },
-      
-      faqQ6: { en: 'How do I enable daily reminders?', tr: 'Günlük hatırlatıcıları nasıl etkinleştiririm?', ar: 'كيف أقوم بتمكين التذكيرات اليومية؟', ru: 'Как включить ежедневные напоминания?' },
-      faqA6: { en: 'Go to Settings (drawer menu) and toggle \'Daily Reminder\'. You\'ll get a notification every day to practice English.', tr: 'Ayarlar\'a gidin (çekmece menüsü) ve \'Günlük Hatırlatıcı\'yı açın. Her gün İngilizce pratik yapmak için bildirim alacaksınız.', ar: 'انتقل إلى الإعدادات (قائمة الدرج) وقم بتبديل \'التذكير اليومي\'. ستحصل على إشعار كل يوم لممارسة اللغة الإنجليزية.', ru: 'Перейдите в Настройки (меню выдвижного ящика) и включите \'Ежедневное напоминание\'. Вы будете получать уведомления каждый день для практики английского.' },
-      
-      // Support Form
-      supportEmailLabel: { en: 'Email Address', tr: 'E-posta Adresi', ar: 'عنوان البريد الإلكتروني', ru: 'Адрес электронной почты' },
-      supportEmailPlaceholder: { en: 'your.email@example.com', tr: 'email@ornek.com', ar: 'بريدك@مثال.com', ru: 'ваш.email@example.com' },
-      supportDescLabel: { en: 'Description', tr: 'Açıklama', ar: 'الوصف', ru: 'Описание' },
-      supportDescPlaceholder: { en: 'Describe your issue or question...', tr: 'Sorununuzu veya sorunuzu açıklayın...', ar: 'صف مشكلتك أو سؤالك...', ru: 'Опишите вашу проблему или вопрос...' },
-      supportCharCount: { en: 'characters', tr: 'karakter', ar: 'حرف', ru: 'символов' },
-      supportSendButton: { en: 'Send Message', tr: 'Mesaj Gönder', ar: 'إرسال رسالة', ru: 'Отправить сообщение' },
-      supportInvalidEmail: { en: 'Invalid Email', tr: 'Geçersiz E-posta', ar: 'بريد إلكتروني غير صالح', ru: 'Неверный email' },
-      supportInvalidEmailMsg: { en: 'Please enter a valid email address.', tr: 'Lütfen geçerli bir e-posta adresi girin.', ar: 'يرجى إدخال عنوان بريد إلكتروني صالح.', ru: 'Пожалуйста, введите действительный адрес электронной почты.' },
-      supportSuccessTitle: { en: '✅ Message Sent', tr: '✅ Mesaj Gönderildi', ar: '✅ تم إرسال الرسالة', ru: '✅ Сообщение отправлено' },
-      supportSuccessMsg: { en: 'Thank you for contacting us! We will respond to your email within 24-48 hours.', tr: 'Bizimle iletişime geçtiğiniz için teşekkür ederiz! E-postanıza 24-48 saat içinde yanıt vereceğiz.', ar: 'شكرًا لاتصالك بنا! سنرد على بريدك الإلكتروني في غضون 24-48 ساعة.', ru: 'Спасибо, что связались с нами! Мы ответим на ваш email в течение 24-48 часов.' },
-      ok: { en: 'OK', tr: 'Tamam', ar: 'حسنًا', ru: 'ОК' },
     };
     return translations[key]?.[selectedLanguage] || translations[key]?.en || key;
   };
 
   // ========================================
-  // VOICE CONVERSATION SYSTEM - ChatGPT Style (OPTIMIZED)
+  // VOICE CONVERSATION SYSTEM - ChatGPT Style
   // ========================================
   
   // State machine: idle → listening → processing → speaking → listening (loop)
@@ -863,8 +862,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   
   const startVoiceConversation = (isRetry = false) => {
     if (__DEV__) console.log('[Voice] 🎙️ Starting conversation mode, isRetry:', isRetry);
+    console.log('[Voice] 📍 Before setVoiceState - current:', voiceState);
     setVoiceState('listening');
     voiceStateRef.current = 'listening';
+    console.log('[Voice] 📍 After setVoiceState - should be listening');
     
     // Only reset flags on fresh start, not on retry
     if (!isRetry) {
@@ -872,180 +873,91 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       voiceRetryCount.current = 0;
     }
     
-    // CRITICAL FIX: Clear accumulated text on fresh start
     currentVoiceText.current = '';
-    console.log('[Voice] 🧹 Cleared accumulated text');
-    
-    // Clear any existing silence timer
-    if (silenceTimer.current) {
-      clearTimeout(silenceTimer.current);
-      silenceTimer.current = null;
-    }
+    console.log('[Voice] 📍 About to call startListening from speech.ts');
     
     let hasReceivedText = false;
-    let lastTextTimestamp = Date.now();
+    
+    const resetTimer = () => {
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+      }
+      
+      // 2 second silence after we get text
+      const timeout = hasReceivedText ? 2000 : 6000;
+      
+      silenceTimer.current = setTimeout(() => {
+        const text = currentVoiceText.current.trim();
+        
+        if (text.length > 0 && voiceStateRef.current === 'listening') {
+          if (__DEV__) console.log('[Voice] ✅ Silence detected, processing:', text);
+          stopListening();
+          setVoiceState('processing');
+          voiceStateRef.current = 'processing';
+          sendVoiceMessage(text);
+          currentVoiceText.current = '';
+        } else {
+          if (__DEV__) console.log('[Voice] ⏸️ Silence but no text, restarting...');
+          // Only restart if still NOT idle AND user hasn't manually stopped
+          if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+            stopListening();
+            setTimeout(() => {
+              // Double-check: only restart if STILL listening and not manually stopped
+              if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+                startVoiceConversation(true); // Pass true to indicate retry
+              }
+            }, 500);
+          }
+        }
+      }, timeout);
+    };
     
     startListening(
       (text) => {
-        // On speech result - ALWAYS update
-        console.log('[Voice] 🎤 Received text:', text, `(length: ${text.length})`);
+        // On speech result (both partial and final)
+        console.log('[Voice] 📥 Got text:', text.substring(0, 50));
+        currentVoiceText.current = text;
         
-        // CRITICAL FIX: ALWAYS update currentVoiceText, don't check length
-        const trimmedText = text.trim();
-        currentVoiceText.current = trimmedText;
-        console.log('[Voice] 💾 Stored in currentVoiceText.current:', trimmedText);
-        
-        // Update timestamp
-        lastTextTimestamp = Date.now();
-        
-        // CRITICAL FIX: Reset silence timer on every text update
-        if (silenceTimer.current) {
-          clearTimeout(silenceTimer.current);
-          silenceTimer.current = null;
-        }
-        
-        // Start new silence timer (3 seconds)
-        if (trimmedText.length > 0 && voiceStateRef.current === 'listening') {
-          console.log('[Voice] ⏱️ Starting 3-second silence timer...');
-          silenceTimer.current = setTimeout(() => {
-            console.log('[Voice] 🔕 3 seconds of silence detected - processing text');
-            
-            // CRITICAL: Check if already processing
-            if (isProcessingVoiceMessage.current) {
-              console.log('[Voice] ⚠️ Already processing voice message, skipping duplicate send');
-              return;
-            }
-            
-            const finalText = currentVoiceText.current.trim();
-            const wordCount = finalText.split(/\s+/).filter(w => w.length > 0).length;
-            
-            console.log('[Voice] 📝 Final text after silence:', finalText, `(${wordCount} words)`);
-            
-            if (finalText.length > 0 && wordCount >= 1 && voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-              console.log('[Voice] ✅ Auto-sending after silence timeout');
-              
-              // CRITICAL: Set processing flag BEFORE sending
-              isProcessingVoiceMessage.current = true;
-              
-              // Set to processing state
-              setVoiceState('processing');
-              voiceStateRef.current = 'processing';
-              
-              // Send message
-              sendVoiceMessage(finalText);
-              
-              // Clear accumulated text
-              currentVoiceText.current = '';
-              console.log('[Voice] 🧹 Cleared accumulated text after sending');
-              
-              // Reset flag after 1 second (enough time for native event to be ignored)
-              setTimeout(() => {
-                isProcessingVoiceMessage.current = false;
-                console.log('[Voice] 🔓 Processing flag reset');
-              }, 1000);
-            }
-          }, 3000); // 3 seconds of silence
-        }
-        
-        if (!hasReceivedText && trimmedText.length > 0) {
+        if (!hasReceivedText && text.length > 0) {
           hasReceivedText = true;
-          console.log('[Voice] 🎤 First text received');
+          console.log('[Voice] 🎬 First text received - user is speaking');
         }
+        
+        resetTimer();
       },
       () => {
-        // On error
+        // On error - don't try to JSON.stringify the error object, it crashes!
         console.log('[Voice] ❌ Speech recognition error occurred');
+        console.log('[Voice] 📊 Voice state:', voiceStateRef.current);
+        console.log('[Voice] 📊 Retry count:', voiceRetryCount.current);
         
-        // Clear silence timer on error
         if (silenceTimer.current) {
           clearTimeout(silenceTimer.current);
           silenceTimer.current = null;
         }
         
+        // LIMIT RETRIES - max 2 attempts to prevent infinite loop
         voiceRetryCount.current++;
-        const maxRetries = 5;
-        
-        if (voiceRetryCount.current >= maxRetries) {
-          console.log(`[Voice] 🛑 Max retries reached (${maxRetries}), stopping voice mode`);
+        if (voiceRetryCount.current >= 3) {
+          console.log('[Voice] 🛑 Max retries reached (3), stopping voice mode');
           stopVoiceConversation();
-          
-          Alert.alert(
-            'Voice Recognition Issue',
-            'Having trouble with speech recognition. Please check your microphone permissions or try again later.',
-            [{ text: 'OK', style: 'default' }]
-          );
           return;
         }
         
         // Only retry if still in listening state AND user hasn't manually stopped
         setTimeout(() => {
           if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-            console.log(`[Voice] 🔄 Retrying after error... (attempt ${voiceRetryCount.current}/${maxRetries})`);
-            startVoiceConversation(true);
+            console.log('[Voice] 🔄 Retrying after error... (attempt', voiceRetryCount.current, '/3)');
+            startVoiceConversation(true); // Pass true to indicate retry
           } else {
             console.log('[Voice] 🛑 Not retrying - user stopped or state changed');
           }
-        }, 800);
-      },
-      () => {
-        // On speech end (native iOS event) - FALLBACK
-        console.log('[Voice] 🛑 Speech ended callback triggered (native event)');
-        
-        // Clear silence timer since native event fired
-        if (silenceTimer.current) {
-          clearTimeout(silenceTimer.current);
-          silenceTimer.current = null;
-          console.log('[Voice] 🧹 Cleared silence timer (native event fired)');
-        }
-        
-        const text = currentVoiceText.current.trim();
-        const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
-        
-        console.log('[Voice] 📝 Accumulated text:', text, `(${wordCount} words)`);
-        console.log('[Voice] 🔍 Current state:', voiceStateRef.current);
-        console.log('[Voice] 🔍 User stopped:', userStoppedVoice.current);
-        
-        if (text.length > 0 && wordCount >= 1 && voiceStateRef.current === 'listening') {
-          console.log('[Voice] ✅ Processing text from native event:', text);
-          
-          // Set to processing state
-          setVoiceState('processing');
-          voiceStateRef.current = 'processing';
-          
-          // Send message
-          sendVoiceMessage(text);
-          
-          // Clear accumulated text
-          currentVoiceText.current = '';
-          console.log('[Voice] 🧹 Cleared accumulated text after sending');
-        } else if (text.length > 0 && wordCount < 1) {
-          console.log('[Voice] ⚠️ Text too short, ignoring:', text);
-          currentVoiceText.current = '';
-          
-          // Restart listening
-          if (!userStoppedVoice.current) {
-            setTimeout(() => {
-              if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-                console.log('[Voice] 🔄 Restarting listening after short text...');
-                startVoiceConversation(true);
-              }
-            }, 300);
-          }
-        } else {
-          console.log('[Voice] ⏸️ No text accumulated or wrong state, restarting...');
-          
-          // Restart listening if no text
-          if (!userStoppedVoice.current && voiceStateRef.current === 'listening') {
-            setTimeout(() => {
-              if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-                console.log('[Voice] 🔄 Restarting listening after no text...');
-                startVoiceConversation(true);
-              }
-            }, 300);
-          }
-        }
+        }, 1000);
       }
     );
+    
+    console.log('[Voice] 🔄 Reset timer initialized');
+    resetTimer();
   };
   
   const stopVoiceConversation = () => {
@@ -1060,19 +972,11 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       silenceTimer.current = null;
     }
     
-    // Stop listening safely with try-catch
-    try {
-      stopListening();
-    } catch (error) {
-      console.log('[Voice] ⚠️ Error stopping listening:', error);
-    }
+    // Stop listening
+    stopListening();
     
-    // Stop speaking safely with try-catch
-    try {
-      ttsService.stop();
-    } catch (error) {
-      console.log('[Voice] ⚠️ Error stopping TTS:', error);
-    }
+    // Stop speaking
+    Tts.stop();
     
     // Clear text
     currentVoiceText.current = '';
@@ -1090,10 +994,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     
     console.log('[Mic] 🔘 Button pressed, current state:', voiceState);
     console.log('[Mic] 🔘 Ref state:', voiceStateRef.current);
+    console.log('[Mic] 🔘 User stopped flag:', userStoppedVoice.current);
     
     if (voiceStateRef.current === 'idle') {
       // Start conversation
       console.log('[Mic] ▶️ Starting voice conversation');
+      console.log('[Mic] 🎤 Calling startVoiceConversation...');
       startVoiceConversation();
     } else {
       // Stop conversation (any state: listening, processing, or speaking)
@@ -1102,13 +1008,32 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
   };
 
+  // Initialize Voice Recognition on mount (Android needs explicit initialization)
+  useEffect(() => {
+    const initVoice = async () => {
+      try {
+        console.log('[Voice] 🎤 Initializing voice recognition...');
+        const { initializeVoice } = await import('./speech');
+        const initialized = await initializeVoice();
+        if (initialized) {
+          console.log('[Voice] ✅ Voice recognition initialized successfully');
+        } else {
+          console.log('[Voice] ⚠️ Voice initialization failed - permissions may be denied');
+        }
+      } catch (error) {
+        console.error('[Voice] ❌ Voice initialization error:', error);
+      }
+    };
+    initVoice();
+  }, []);
+
   // TTS Events - Integrated with voice conversation
   useEffect(() => {
     console.log('[TTS] 🔧 Initializing TTS with premium neural voice');
-    ttsService.setDefaultLanguage('en-US');
+    Tts.setDefaultLanguage('en-US');
     
     // Get and select best quality voice
-    ttsService.voices().then((voices: any[]) => {
+    Tts.voices().then((voices: any[]) => {
       console.log('[TTS] 📢 Available voices:', voices.length);
       
       // Log all voices for debugging (helps identify best voice)
@@ -1164,6 +1089,20 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         console.log(`[TTS] ✅ Using first enhanced voice: ${selectedVoice.name}`);
       }
       
+      // Android-specific: Look for Google TTS voices (highest quality)
+      if (!selectedVoice && Platform.OS === 'android') {
+        const googleVoices = voices.filter((v: any) => 
+          v.language === 'en-US' && 
+          (v.name.includes('Google') || v.name.includes('en-us-'))
+        );
+        
+        if (googleVoices.length > 0) {
+          // Prefer en-us-x-sfg (female, high quality)
+          selectedVoice = googleVoices.find((v: any) => v.name.includes('sfg')) || googleVoices[0];
+          console.log(`[TTS] 🤖 Using Google TTS voice: ${selectedVoice.name}`);
+        }
+      }
+      
       // Final fallback: Any decent en-US female voice
       if (!selectedVoice) {
         selectedVoice = voices.find((v: any) => 
@@ -1180,31 +1119,36 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       
       if (selectedVoice) {
         console.log(`[TTS] 🎯 FINAL SELECTION: ${selectedVoice.name} (Quality: ${selectedVoice.quality})`);
-        ttsService.setDefaultVoice(selectedVoice.id);
+        Tts.setDefaultVoice(selectedVoice.id);
       }
       
       // CRITICAL: Speech parameters for human-like, non-robotic speech
-      // Lower rate = more natural with better prosody and emphasis
-      // Pitch variations handled by premium voices automatically
-      ttsService.setDefaultRate(0.50);     // Optimal conversational speed (0.40-0.55 range)
-      ttsService.setDefaultPitch(1.0);     // Natural pitch (0.5-2.0 range, 1.0 = normal)
+      // Android: Slightly faster rate for Google TTS (sounds more natural)
+      // iOS: Slower rate for better clarity
+      const optimalRate = Platform.OS === 'android' ? 0.55 : 0.50;
+      const optimalPitch = Platform.OS === 'android' ? 1.05 : 1.0;
+      
+      Tts.setDefaultRate(optimalRate);     // Optimal conversational speed
+      Tts.setDefaultPitch(optimalPitch);   // Natural pitch
+      
+      console.log(`[TTS] 🎚️ Platform: ${Platform.OS}, Rate: ${optimalRate}, Pitch: ${optimalPitch}`);
       
       // iOS specific: Set high quality audio
       if (Platform.OS === 'ios') {
-        ttsService.setDucking(true);       // Duck other audio when speaking
-        ttsService.setIgnoreSilentSwitch('ignore'); // Play even if silent switch is on
+        Tts.setDucking(true);       // Duck other audio when speaking
+        Tts.setIgnoreSilentSwitch('ignore'); // Play even if silent switch is on
       }
       
       console.log('[TTS] 🎚️ Speech params: Rate=0.50, Pitch=1.0, Ducking=ON');
-    }); // FIXED: Added missing closing parenthesis for .then() callback
+    });
     
-    ttsService.addEventListener('tts-start', () => {
+    Tts.addEventListener('tts-start', () => {
       console.log('[TTS] 🔊 Started speaking');
       setVoiceState('speaking');
       voiceStateRef.current = 'speaking';
     });
     
-    ttsService.addEventListener('tts-finish', () => {
+    Tts.addEventListener('tts-finish', () => {
       console.log('[TTS] ✅ Finished speaking');
       
       // Auto-restart listening only if still speaking AND user hasn't manually stopped
@@ -1220,67 +1164,51 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       }
     });
     
-    ttsService.addEventListener('tts-cancel', () => {
+    Tts.addEventListener('tts-cancel', () => {
       console.log('[TTS] ⛔ Cancelled');
       // Don't auto-restart, user stopped it
     });
 
     return () => {
-      ttsService.removeAllListeners('tts-start');
-      ttsService.removeAllListeners('tts-finish');
-      ttsService.removeAllListeners('tts-cancel');
+      Tts.removeAllListeners('tts-start');
+      Tts.removeAllListeners('tts-finish');
+      Tts.removeAllListeners('tts-cancel');
     };
   }, []); // Empty deps - setup only once
 
   // Initialize
   useEffect(() => {
     const init = async () => {
-      await initializeApi();
-      initializeVoice();
-      
-      // Check if device is already registered
-      const registered = await checkRegistration();
-      console.log('[Init] Registration check:', registered);
-      
-      // If NOT registered, automatically register device without voucher (free tier)
-      if (!registered) {
-        console.log('[Init] 📱 Auto-registering device (free tier)...');
-        try {
-          const success = await registerUser(); // No voucher = free tier
-          if (success) {
-            console.log('[Init] ✅ Device registered successfully (free tier)');
-            // Save to local storage so we don't register again
-            await saveRegistration('FREE_TIER');
-          } else {
-            console.log('[Init] ⚠️ Device registration failed');
-          }
-        } catch (error) {
-          console.error('[Init] ❌ Registration error:', error);
-        }
-      } else {
-        console.log('[Init] ✅ Device already registered');
-      }
-      
-      // Check if user can send messages
-      const canSend = await canSendMessage();
-      console.log('[Init] Can send message:', canSend);
-
-      // Bildirim durumunu yükle veya ilk kez açılıyorsa otomatik aç
+      // Bildirim durumunu yükle
       try {
         const notifEnabled = await AsyncStorage.getItem('notificationsEnabled');
         if (notifEnabled === null) {
           // İlk kez açılıyor, otomatik olarak bildirimleri aç
-          const permissions = await NotificationService.requestPermissions();
-          if (permissions) {
+          const hasPermission = await checkAndroidNotificationPermission();
+          if (hasPermission) {
+            // İzin zaten var, direkt aktif et
             setNotificationsEnabled(true);
             NotificationService.scheduleDailyReminders(selectedLanguage);
             await AsyncStorage.setItem('notificationsEnabled', 'true');
-            console.log('[Notifications] 🔔 Auto-enabled on first launch');
+            console.log('[Notifications] 🔔 Auto-enabled with existing permission');
+          } else {
+            // İzin yok, kullanıcı manuel açacak
+            console.log('[Notifications] ⏳ Waiting for user to enable notifications');
           }
         } else if (notifEnabled === 'true') {
-          setNotificationsEnabled(true);
-          // Mevcut bildirimleri kontrol et, yoksa yeniden ayarla
-          NotificationService.checkScheduledNotifications();
+          // Önceden aktif edilmiş, izin kontrolü yap
+          const hasPermission = await checkAndroidNotificationPermission();
+          if (hasPermission) {
+            setNotificationsEnabled(true);
+            // Mevcut bildirimleri kontrol et, yoksa yeniden ayarla
+            NotificationService.checkScheduledNotifications();
+            console.log('[Notifications] 🔔 Notifications restored');
+          } else {
+            // İzin kaldırılmış, durumu güncelle
+            setNotificationsEnabled(false);
+            await AsyncStorage.setItem('notificationsEnabled', 'false');
+            console.log('[Notifications] ⚠️ Permission revoked, disabled notifications');
+          }
         }
       } catch (error) {
         console.error('[Notifications] Load error:', error);
@@ -1292,7 +1220,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       if (silenceTimer.current) {
         clearTimeout(silenceTimer.current);
       }
-      destroyVoice();
     };
   }, []);
 
@@ -1369,7 +1296,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 style={styles.contextMenuItem}
                 onPress={() => {
                   triggerHaptic('light');
-                  ttsService.speak(item.content);
+                  Tts.speak(item.content);
                   setMessageContextMenu(null);
                 }}
               >
@@ -1393,12 +1320,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
 
   return (
     <SafeAreaView style={[styles.container, theme === 'light' && styles.containerLight]} edges={['top', 'bottom']}>
-      <VoucherModal 
-        visible={showVoucherModal} 
-        onSubmit={handleVoucherSubmit}
-        onClose={() => setShowVoucherModal(false)}
-      />
-
       {/* About Modal */}
       {showAboutModal && (
         <View style={styles.modalOverlay}>
@@ -1621,7 +1542,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         </View>
       )}
 
-      {/* ADIM 3: FAQ Modal */}
+      {/* FAQ Modal */}
       {showFaqModal && (
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
@@ -1631,82 +1552,56 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
-              {/* FAQ Item 1 */}
+            <ScrollView style={styles.modalBody}>
               <View style={styles.faqItem}>
                 <View style={styles.faqQuestion}>
                   <Ionicons name="help-circle" size={20} color="#7DD3C0" />
                   <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
-                    {getTranslation('faqQ1')}
+                    {selectedLanguage === 'tr' ? 'Kspeaker nedir?' : 
+                     selectedLanguage === 'ar' ? 'ما هو Kspeaker؟' :
+                     selectedLanguage === 'ru' ? 'Что такое Kspeaker?' :
+                     'What is Kspeaker?'}
                   </Text>
                 </View>
                 <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
-                  {getTranslation('faqA1')}
+                  {selectedLanguage === 'tr' ? 'Kspeaker, İngilizce pratiği için tasarlanmış yapay zeka destekli bir asistanıdır.' :
+                   selectedLanguage === 'ar' ? 'Kspeaker هو مساعد مدعوم بالذكاء الاصطناعي لممارسة اللغة الإنجليزية.' :
+                   selectedLanguage === 'ru' ? 'Kspeaker - это AI-помощник для практики английского языка.' :
+                   'Kspeaker is an AI-powered assistant designed for English practice.'}
                 </Text>
               </View>
-
-              {/* FAQ Item 2 */}
               <View style={styles.faqItem}>
                 <View style={styles.faqQuestion}>
                   <Ionicons name="help-circle" size={20} color="#7DD3C0" />
                   <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
-                    {getTranslation('faqQ2')}
+                    {selectedLanguage === 'tr' ? 'Sesli konuşma nasıl çalışır?' :
+                     selectedLanguage === 'ar' ? 'كيف تعمل المحادثة الصوتية؟' :
+                     selectedLanguage === 'ru' ? 'Как работает голосовой разговор?' :
+                     'How does voice conversation work?'}
                   </Text>
                 </View>
                 <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
-                  {getTranslation('faqA2')}
+                  {selectedLanguage === 'tr' ? 'Mikrofon butonuna basın ve konuşun. AI sizi dinler ve yanıt verir.' :
+                   selectedLanguage === 'ar' ? 'اضغط على زر الميكروفون وتحدث. يستمع الذكاء الاصطناعي ويستجيب.' :
+                   selectedLanguage === 'ru' ? 'Нажмите кнопку микрофона и говорите. ИИ слушает и отвечает.' :
+                   'Press the microphone button and speak. AI listens and responds.'}
                 </Text>
               </View>
-
-              {/* FAQ Item 3 */}
               <View style={styles.faqItem}>
                 <View style={styles.faqQuestion}>
                   <Ionicons name="help-circle" size={20} color="#7DD3C0" />
                   <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
-                    {getTranslation('faqQ3')}
+                    {selectedLanguage === 'tr' ? 'Flash Cards nedir?' :
+                     selectedLanguage === 'ar' ? 'ما هي البطاقات التعليمية؟' :
+                     selectedLanguage === 'ru' ? 'Что такое флэш-карты?' :
+                     'What are Flash Cards?'}
                   </Text>
                 </View>
                 <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
-                  {getTranslation('faqA3')}
-                </Text>
-              </View>
-
-              {/* FAQ Item 4 */}
-              <View style={styles.faqItem}>
-                <View style={styles.faqQuestion}>
-                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
-                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
-                    {getTranslation('faqQ4')}
-                  </Text>
-                </View>
-                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
-                  {getTranslation('faqA4')}
-                </Text>
-              </View>
-
-              {/* FAQ Item 5 */}
-              <View style={styles.faqItem}>
-                <View style={styles.faqQuestion}>
-                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
-                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
-                    {getTranslation('faqQ5')}
-                  </Text>
-                </View>
-                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
-                  {getTranslation('faqA5')}
-                </Text>
-              </View>
-
-              {/* FAQ Item 6 */}
-              <View style={styles.faqItem}>
-                <View style={styles.faqQuestion}>
-                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
-                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
-                    {getTranslation('faqQ6')}
-                  </Text>
-                </View>
-                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
-                  {getTranslation('faqA6')}
+                  {selectedLanguage === 'tr' ? 'Flash Cards kelime dağarcığınızı geliştirmek için etkileşimli kartlardır.' :
+                   selectedLanguage === 'ar' ? 'البطاقات التعليمية بطاقات تفاعلية لتحسين مفرداتك.' :
+                   selectedLanguage === 'ru' ? 'Флэш-карты - интерактивные карточки для улучшения словарного запаса.' :
+                   'Flash Cards are interactive cards to improve your vocabulary.'}
                 </Text>
               </View>
             </ScrollView>
@@ -1714,7 +1609,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         </View>
       )}
 
-      {/* ADIM 3: Support Modal */}
+      {/* Support Modal */}
       {showSupportModal && (
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
@@ -1723,97 +1618,338 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
               <TouchableOpacity onPress={() => {
                 setShowSupportModal(false);
                 setSupportEmail('');
-                setSupportDescription('');
+                setSupportMessage('');
               }}>
                 <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
-              <Text style={[styles.supportLabel, theme === 'light' && styles.supportLabelLight]}>
-                {getTranslation('supportEmailLabel')}
-              </Text>
-              <TextInput
-                style={[styles.supportInput, theme === 'light' && styles.supportInputLight]}
-                value={supportEmail}
-                onChangeText={setSupportEmail}
-                placeholder={getTranslation('supportEmailPlaceholder')}
-                placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+            <ScrollView style={styles.modalBody}>
+              <View style={styles.supportSection}>
+                <Ionicons name="mail" size={48} color="#7DD3C0" style={{ alignSelf: 'center', marginBottom: 16 }} />
+                <Text style={[styles.supportTitle, theme === 'light' && styles.supportTitleLight]}>
+                  {selectedLanguage === 'tr' ? 'İletişime Geçin' :
+                   selectedLanguage === 'ar' ? 'اتصل بنا' :
+                   selectedLanguage === 'ru' ? 'Свяжитесь с нами' :
+                   'Get in Touch'}
+                </Text>
+                <Text style={[styles.supportText, theme === 'light' && styles.supportTextLight]}>
+                  {selectedLanguage === 'tr' ? 'Sorularınız veya önerileriniz için bizimle iletişime geçin.' :
+                   selectedLanguage === 'ar' ? 'اتصل بنا إذا كان لديك أسئلة أو اقتراحات.' :
+                   selectedLanguage === 'ru' ? 'Свяжитесь с нами, если у вас есть вопросы или предложения.' :
+                   'Contact us with your questions or suggestions.'}
+                </Text>
+              </View>
 
-              <Text style={[styles.supportLabel, theme === 'light' && styles.supportLabelLight, { marginTop: 20 }]}>
-                {getTranslation('supportDescLabel')}
-              </Text>
-              <TextInput
-                style={[styles.supportTextarea, theme === 'light' && styles.supportTextareaLight]}
-                value={supportDescription}
-                onChangeText={(text) => {
-                  // Limit to 500 characters
-                  if (text.length <= 500) {
-                    setSupportDescription(text);
-                  }
-                }}
-                placeholder={getTranslation('supportDescPlaceholder')}
-                placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
-                multiline
-                numberOfLines={8}
-                maxLength={500}
-                textAlignVertical="top"
-              />
-              <Text style={[styles.characterCount, theme === 'light' && styles.characterCountLight]}>
-                {supportDescription.length}/500 {getTranslation('supportCharCount')}
-              </Text>
+              {/* Email Input */}
+              <View style={styles.supportInputContainer}>
+                <Text style={[styles.supportInputLabel, theme === 'light' && styles.supportInputLabelLight]}>
+                  {selectedLanguage === 'tr' ? 'E-posta Adresiniz' :
+                   selectedLanguage === 'ar' ? 'عنوان بريدك الإلكتروني' :
+                   selectedLanguage === 'ru' ? 'Ваш email' :
+                   'Your Email'}
+                </Text>
+                <TextInput
+                  style={[styles.supportInput, theme === 'light' && styles.supportInputLight]}
+                  placeholder={selectedLanguage === 'tr' ? 'ornek@email.com' :
+                              selectedLanguage === 'ar' ? 'example@email.com' :
+                              selectedLanguage === 'ru' ? 'пример@email.com' :
+                              'example@email.com'}
+                  placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                  value={supportEmail}
+                  onChangeText={setSupportEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
 
-              <TouchableOpacity
-                style={[
-                  styles.supportButton,
-                  (!supportEmail.trim() || !supportDescription.trim()) && styles.supportButtonDisabled
-                ]}
+              {/* Message Input */}
+              <View style={styles.supportInputContainer}>
+                <Text style={[styles.supportInputLabel, theme === 'light' && styles.supportInputLabelLight]}>
+                  {selectedLanguage === 'tr' ? 'Mesajınız' :
+                   selectedLanguage === 'ar' ? 'رسالتك' :
+                   selectedLanguage === 'ru' ? 'Ваше сообщение' :
+                   'Your Message'}
+                </Text>
+                <TextInput
+                  style={[styles.supportTextArea, theme === 'light' && styles.supportInputLight]}
+                  placeholder={selectedLanguage === 'tr' ? 'Lütfen sorununuzu veya önerinizi açıklayın...' :
+                              selectedLanguage === 'ar' ? 'يرجى وصف مشكلتك أو اقتراحك...' :
+                              selectedLanguage === 'ru' ? 'Пожалуйста, опишите вашу проблему или предложение...' :
+                              'Please describe your issue or suggestion...'}
+                  placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                  value={supportMessage}
+                  onChangeText={setSupportMessage}
+                  multiline
+                  numberOfLines={6}
+                  textAlignVertical="top"
+                />
+              </View>
+
+              {/* Send Email Button */}
+              <TouchableOpacity 
+                style={[styles.supportButton, theme === 'light' && styles.supportButtonLight, 
+                       (!supportEmail || !supportMessage) && styles.supportButtonDisabled]}
                 onPress={async () => {
-                  if (supportEmail.trim() && supportDescription.trim()) {
-                    // Email validation
-                    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                    if (!emailRegex.test(supportEmail.trim())) {
-                      Alert.alert(getTranslation('supportInvalidEmail'), getTranslation('supportInvalidEmailMsg'));
-                      return;
-                    }
+                  if (!supportEmail || !supportMessage) {
+                    Alert.alert(
+                      selectedLanguage === 'tr' ? 'Eksik Bilgi' : 
+                      selectedLanguage === 'ar' ? 'معلومات ناقصة' :
+                      selectedLanguage === 'ru' ? 'Недостающая информация' :
+                      'Missing Information',
+                      selectedLanguage === 'tr' ? 'Lütfen e-posta adresinizi ve mesajınızı girin.' :
+                      selectedLanguage === 'ar' ? 'يرجى إدخال عنوان بريدك الإلكتروني ورسالتك.' :
+                      selectedLanguage === 'ru' ? 'Пожалуйста, введите ваш email и сообщение.' :
+                      'Please enter your email and message.',
+                      [{ text: 'OK' }]
+                    );
+                    return;
+                  }
 
-                    try {
-                      // Send support email
-                      const result = await EmailService.sendSupportEmail(supportEmail, supportDescription);
-
-                      if (result.success) {
-                        // Show success message
-                        Alert.alert(
-                          getTranslation('supportSuccessTitle'),
-                          getTranslation('supportSuccessMsg'),
-                          [{ 
-                            text: getTranslation('ok'), 
+                  try {
+                    // Create mailto URL with proper encoding and better format
+                    const subject = encodeURIComponent('Kspeaker Support - Kullanıcı Talebi');
+                    const body = encodeURIComponent(
+                      `Merhaba Kspeaker Destek Ekibi,\n\n` +
+                      `===========================================\n` +
+                      `KULLANICI BİLGİLERİ:\n` +
+                      `===========================================\n` +
+                      `Gönderen Email: ${supportEmail}\n` +
+                      `Tarih: ${new Date().toLocaleString('tr-TR')}\n\n` +
+                      `===========================================\n` +
+                      `MESAJ:\n` +
+                      `===========================================\n` +
+                      `${supportMessage}\n\n` +
+                      `-------------------------------------------\n` +
+                      `Bu mesaj Kspeaker mobil uygulamasından gönderilmiştir.\n` +
+                      `Lütfen kullanıcıya ${supportEmail} adresinden yanıt verin.`
+                    );
+                    const mailtoUrl = `mailto:omer.yilmaz@kartezya.com?subject=${subject}&body=${body}`;
+                    
+                    // Check if URL can be opened
+                    const canOpen = await Linking.canOpenURL(mailtoUrl);
+                    
+                    if (canOpen) {
+                      await Linking.openURL(mailtoUrl);
+                      
+                      // Don't clear form immediately - wait for user confirmation
+                      Alert.alert(
+                        selectedLanguage === 'tr' ? '✉️ Gmail Açıldı!' :
+                        selectedLanguage === 'ar' ? '✉️ تم فتح Gmail!' :
+                        selectedLanguage === 'ru' ? '✉️ Gmail Открыт!' :
+                        '✉️ Gmail Opened!',
+                        selectedLanguage === 'tr' ? 
+                          '1️⃣ Gmail uygulamanızda MESAJI KONTROL EDİN\n\n' +
+                          '2️⃣ Mesaj doğruysa SAĞ ÜSTTEKİ GÖNDER (✈️) BUTONUNA BASIN\n\n' +
+                          '3️⃣ Mesaj gönderildiğinde bu formu kapatabilirsiniz\n\n' +
+                          '⚠️ ÖNEMLİ: Gönder butonuna basmadan geri gelirseniz mesajınız gönderilemez!' :
+                        selectedLanguage === 'ar' ? 
+                          '1️⃣ تحقق من الرسالة في تطبيق Gmail\n\n' +
+                          '2️⃣ إذا كانت الرسالة صحيحة، اضغط على زر الإرسال (✈️) في الأعلى\n\n' +
+                          '3️⃣ بعد إرسال الرسالة، يمكنك إغلاق هذا النموذج\n\n' +
+                          '⚠️ مهم: إذا عدت دون الضغط على إرسال، لن يتم إرسال رسالتك!' :
+                        selectedLanguage === 'ru' ? 
+                          '1️⃣ Проверьте сообщение в приложении Gmail\n\n' +
+                          '2️⃣ Если сообщение правильное, нажмите кнопку ОТПРАВИТЬ (✈️) вверху\n\n' +
+                          '3️⃣ После отправки сообщения можете закрыть эту форму\n\n' +
+                          '⚠️ ВАЖНО: Если вы вернетесь без нажатия отправить, ваше сообщение не будет отправлено!' :
+                          '1️⃣ CHECK the message in your Gmail app\n\n' +
+                          '2️⃣ If the message is correct, PRESS the SEND (✈️) button at the top right\n\n' +
+                          '3️⃣ After sending, you can close this form\n\n' +
+                          '⚠️ IMPORTANT: If you return without pressing send, your message will NOT be sent!',
+                        [
+                          { 
+                            text: selectedLanguage === 'tr' ? 'Gönderdim ✅' :
+                                  selectedLanguage === 'ar' ? 'أرسلت ✅' :
+                                  selectedLanguage === 'ru' ? 'Отправил ✅' :
+                                  'Sent ✅',
                             onPress: () => {
-                              setShowSupportModal(false);
+                              // Clear form after user confirms
                               setSupportEmail('');
-                              setSupportDescription('');
+                              setSupportMessage('');
+                              setShowSupportModal(false);
+                              Alert.alert(
+                                selectedLanguage === 'tr' ? '🎉 Teşekkürler!' :
+                                selectedLanguage === 'ar' ? '🎉 شكراً!' :
+                                selectedLanguage === 'ru' ? '🎉 Спасибо!' :
+                                '🎉 Thank You!',
+                                selectedLanguage === 'tr' ? '24-48 saat içinde size dönüş yapacağız.' :
+                                selectedLanguage === 'ar' ? 'سنرد عليك في غضون 24-48 ساعة.' :
+                                selectedLanguage === 'ru' ? 'Мы ответим вам в течение 24-48 часов.' :
+                                'We will respond within 24-48 hours.'
+                              );
                             }
-                          }]
-                        );
-                      } else {
-                        // Show error message
-                        Alert.alert('❌ Error', result.error || 'Failed to send support message. Please try again later.');
-                      }
-                    } catch (error) {
-                      console.error('[Support] ❌ Error sending support message:', error);
-                      Alert.alert('❌ Error', 'Failed to send support message. Please try again later.');
+                          },
+                          { 
+                            text: selectedLanguage === 'tr' ? 'Henüz Göndermedim' :
+                                  selectedLanguage === 'ar' ? 'لم أرسل بعد' :
+                                  selectedLanguage === 'ru' ? 'Еще не отправил' :
+                                  'Not Yet',
+                            style: 'cancel'
+                          }
+                        ]
+                      );
+                    } else {
+                      throw new Error('Cannot open email app');
                     }
+                  } catch (error) {
+                    console.error('Error opening email:', error);
+                    // Copy email to clipboard as fallback
+                    Alert.alert(
+                      selectedLanguage === 'tr' ? 'E-posta Uygulaması Bulunamadı' :
+                      selectedLanguage === 'ar' ? 'لم يتم العثور على تطبيق البريد الإلكتروني' :
+                      selectedLanguage === 'ru' ? 'Почтовое приложение не найдено' :
+                      'Email App Not Found',
+                      selectedLanguage === 'tr' ? `Cihazınızda e-posta uygulaması yüklü değil.\n\nLütfen omer.yilmaz@kartezya.com adresine manuel olarak yazın:\n\nKonu: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}` :
+                      selectedLanguage === 'ar' ? `لا يوجد تطبيق بريد إلكتروني على جهازك.\n\nيرجى الكتابة يدويًا إلى omer.yilmaz@kartezya.com:\n\nالموضوع: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}` :
+                      selectedLanguage === 'ru' ? `На вашем устройстве нет почтового приложения.\n\nПожалуйста, напишите вручную на omer.yilmaz@kartezya.com:\n\nТема: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}` :
+                      `No email app found on your device.\n\nPlease write manually to omer.yilmaz@kartezya.com:\n\nSubject: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}`,
+                      [
+                        { 
+                          text: 'OK',
+                          onPress: () => {
+                            // Keep form data for manual sending
+                          }
+                        }
+                      ]
+                    );
                   }
                 }}
-                disabled={!supportEmail.trim() || !supportDescription.trim()}
               >
-                <Ionicons name="send" size={20} color="#FFFFFF" />
-                <Text style={styles.supportButtonText}>{getTranslation('supportSendButton')}</Text>
+                <Ionicons name="send" size={24} color="#FFFFFF" />
+                <Text style={styles.supportButtonText}>
+                  {selectedLanguage === 'tr' ? 'Mesaj Gönder' :
+                   selectedLanguage === 'ar' ? 'إرسال رسالة' :
+                   selectedLanguage === 'ru' ? 'Отправить сообщение' :
+                   'Send Message'}
+                </Text>
               </TouchableOpacity>
+
+              <View style={styles.supportDivider} />
+              
+              <View style={styles.supportSection}>
+                <Text style={[styles.supportInfoText, theme === 'light' && styles.supportTextLight]}>
+                  {selectedLanguage === 'tr' ? '📧 E-posta: omer.yilmaz@kartezya.com' :
+                   selectedLanguage === 'ar' ? '📧 البريد الإلكتروني: omer.yilmaz@kartezya.com' :
+                   selectedLanguage === 'ru' ? '📧 Email: omer.yilmaz@kartezya.com' :
+                   '📧 Email: omer.yilmaz@kartezya.com'}
+                </Text>
+                <Text style={[styles.supportInfoText, theme === 'light' && styles.supportTextLight]}>
+                  {selectedLanguage === 'tr' ? '⏰ Yanıt süresi: 24-48 saat' :
+                   selectedLanguage === 'ar' ? '⏰ وقت الاستجابة: 24-48 ساعة' :
+                   selectedLanguage === 'ru' ? '⏰ Время ответа: 24-48 часов' :
+                   '⏰ Response time: 24-48 hours'}
+                </Text>
+              </View>
             </ScrollView>
+          </View>
+        </View>
+      )}
+
+      {/* Voucher Modal */}
+      {showVoucherModal && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
+            <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
+              <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('addVoucher')}</Text>
+              <TouchableOpacity onPress={() => setShowVoucherModal(false)}>
+                <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              <View style={styles.voucherSection}>
+                <Ionicons name="ticket" size={64} color="#7DD3C0" style={{ alignSelf: 'center', marginBottom: 16 }} />
+                <Text style={[styles.voucherTitle, theme === 'light' && styles.voucherTitleLight]}>
+                  {selectedLanguage === 'tr' ? 'Premium Erişim' :
+                   selectedLanguage === 'ar' ? 'الوصول المميز' :
+                   selectedLanguage === 'ru' ? 'Премиум доступ' :
+                   'Premium Access'}
+                </Text>
+                <Text style={[styles.voucherText, theme === 'light' && styles.voucherTextLight]}>
+                  {selectedLanguage === 'tr' ? 'Kupon kodunuzu girerek premium özelliklere erişim sağlayın. Sınırsız konuşma, gelişmiş AI modelleri ve daha fazlası!' :
+                   selectedLanguage === 'ar' ? 'أدخل رمز القسيمة للوصول إلى الميزات المميزة. محادثات غير محدودة ونماذج ذكاء اصطناعي متقدمة والمزيد!' :
+                   selectedLanguage === 'ru' ? 'Введите код ваучера для доступа к премиум функциям. Неограниченные разговоры, продвинутые AI модели и многое другое!' :
+                   'Enter your voucher code to access premium features. Unlimited conversations, advanced AI models, and more!'}
+                </Text>
+              </View>
+
+              <View style={styles.voucherInputContainer}>
+                <TextInput
+                  style={[styles.voucherInput, theme === 'light' && styles.voucherInputLight]}
+                  placeholder={selectedLanguage === 'tr' ? 'Kupon kodunu girin' :
+                              selectedLanguage === 'ar' ? 'أدخل رمز القسيمة' :
+                              selectedLanguage === 'ru' ? 'Введите код ваучера' :
+                              'Enter voucher code'}
+                  placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                  autoCapitalize="characters"
+                  maxLength={32}
+                />
+              </View>
+
+              <TouchableOpacity 
+                style={[styles.voucherButton, theme === 'light' && styles.voucherButtonLight]}
+                onPress={() => {
+                  // Voucher activation logic
+                  Alert.alert(
+                    selectedLanguage === 'tr' ? 'Kupon Aktivasyonu' :
+                    selectedLanguage === 'ar' ? 'تفعيل القسيمة' :
+                    selectedLanguage === 'ru' ? 'Активация ваучера' :
+                    'Voucher Activation',
+                    selectedLanguage === 'tr' ? 'Kupon sistemi yakında aktif olacak!' :
+                    selectedLanguage === 'ar' ? 'نظام القسائم سيكون نشطًا قريبًا!' :
+                    selectedLanguage === 'ru' ? 'Система ваучеров скоро будет активна!' :
+                    'Voucher system coming soon!',
+                    [{ text: 'OK', onPress: () => setShowVoucherModal(false) }]
+                  );
+                }}
+              >
+                <Ionicons name="checkmark-circle" size={24} color="#FFFFFF" />
+                <Text style={styles.voucherButtonText}>
+                  {selectedLanguage === 'tr' ? 'Kuponu Aktifleştir' :
+                   selectedLanguage === 'ar' ? 'تفعيل القسيمة' :
+                   selectedLanguage === 'ru' ? 'Активировать' :
+                   'Activate Voucher'}
+                </Text>
+              </TouchableOpacity>
+
+              <View style={styles.voucherDivider} />
+
+              <View style={styles.voucherSection}>
+                <Text style={[styles.voucherInfoTitle, theme === 'light' && styles.voucherInfoTitleLight]}>
+                  {selectedLanguage === 'tr' ? '💎 Premium Özellikler' :
+                   selectedLanguage === 'ar' ? '💎 الميزات المميزة' :
+                   selectedLanguage === 'ru' ? '💎 Премиум функции' :
+                   '💎 Premium Features'}
+                </Text>
+                <View style={styles.voucherFeature}>
+                  <Ionicons name="infinite" size={20} color="#7DD3C0" />
+                  <Text style={[styles.voucherFeatureText, theme === 'light' && styles.voucherFeatureTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Sınırsız konuşma' :
+                     selectedLanguage === 'ar' ? 'محادثات غير محدودة' :
+                     selectedLanguage === 'ru' ? 'Неограниченные разговоры' :
+                     'Unlimited conversations'}
+                  </Text>
+                </View>
+                <View style={styles.voucherFeature}>
+                  <Ionicons name="trending-up" size={20} color="#7DD3C0" />
+                  <Text style={[styles.voucherFeatureText, theme === 'light' && styles.voucherFeatureTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Gelişmiş AI modelleri' :
+                     selectedLanguage === 'ar' ? 'نماذج ذكاء اصطناعي متقدمة' :
+                     selectedLanguage === 'ru' ? 'Продвинутые AI модели' :
+                     'Advanced AI models'}
+                  </Text>
+                </View>
+                <View style={styles.voucherFeature}>
+                  <Ionicons name="flash" size={20} color="#7DD3C0" />
+                  <Text style={[styles.voucherFeatureText, theme === 'light' && styles.voucherFeatureTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Öncelikli yanıt süresi' :
+                     selectedLanguage === 'ar' ? 'وقت استجابة ذو أولوية' :
+                     selectedLanguage === 'ru' ? 'Приоритетное время ответа' :
+                     'Priority response time'}
+                  </Text>
+                </View>
+              </View>
+            </View>
           </View>
         </View>
       )}
@@ -1833,136 +1969,104 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         theme === 'light' && styles.drawerLight,
       ]}>
         <View style={styles.drawerContent}>
-          <TouchableOpacity style={styles.drawerItem} onPress={() => {
-            setShowSettingsModal(true);
-            toggleDrawer();
-          }}>
+          {/* 1. Settings */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              setShowSettingsModal(true);
+              toggleDrawer();
+            }}>
             <Ionicons name="settings-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('settings')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.drawerItem} onPress={openAboutModal}>
+
+          {/* 2. About Kspeaker */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openAboutModal();
+            }}>
             <Ionicons name="information-circle-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('about')}</Text>
           </TouchableOpacity>
-          
-          {/* ADIM 2: FAQ Button */}
-          <TouchableOpacity style={styles.drawerItem} onPress={() => {
-            closeDrawer();
-            setTimeout(() => setShowFaqModal(true), 300);
-          }}>
+
+          {/* 3. FAQ */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openFaqModal();
+            }}>
             <Ionicons name="help-circle-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('faq')}</Text>
           </TouchableOpacity>
-          
-          {/* ADIM 2: Support Button */}
-          <TouchableOpacity style={styles.drawerItem} onPress={() => {
-            closeDrawer();
-            setTimeout(() => setShowSupportModal(true), 300);
-          }}>
+
+          {/* 4. Support */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openSupportModal();
+            }}>
             <Ionicons name="mail-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('support')}</Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity style={styles.drawerItem} onPress={openLanguageModal}>
+
+          {/* 5. Language */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openLanguageModal();
+            }}>
             <Ionicons name="language" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('language')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.drawerItem} onPress={toggleTheme}>
+
+          {/* 6. Light Mode / Dark Mode Toggle */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('medium');
+              toggleTheme();
+            }}>
             <Ionicons name={theme === 'dark' ? 'sunny' : 'moon'} size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>
               {theme === 'dark' ? getTranslation('lightMode') : getTranslation('darkMode')}
             </Text>
           </TouchableOpacity>
           
-          {/* Flash Cards */}
+          {/* Divider */}
           <View style={styles.drawerDivider} />
-          
-          {/* Test Admin Voucher - REMOVED (kept for dev reference but disabled) */}
-          {false && __DEV__ && (
-            <TouchableOpacity 
-              style={styles.drawerItem} 
-              onPress={async () => {
-                toggleDrawer();
-                triggerHaptic('medium');
-                
-                try {
-                  console.log('[Admin] 🎟️ Creating test voucher...');
-                  Alert.alert('⏳ Creating Voucher...', 'Please wait...');
-                  
-                  // Create voucher with 1 month expiry
-                  const expiresAt = new Date();
-                  expiresAt.setMonth(expiresAt.getMonth() + 1);
-                  
-                  const voucherCode = await createVoucher(expiresAt.toISOString());
-                  
-                  if (voucherCode) {
-                    console.log('[Admin] ✅ Voucher created:', voucherCode);
-                    
-                    // Automatically register with this voucher
-                    const success = await saveRegistration(voucherCode);
-                    
-                    if (success) {
-                      Alert.alert(
-                        '🎉 Premium Activated!',
-                        `Voucher Code: ${voucherCode}\n\nYou now have unlimited messages! The voucher has been automatically applied.`,
-                        [{ text: 'Awesome!', style: 'default' }]
-                      );
-                    } else {
-                      Alert.alert(
-                        '⚠️ Voucher Created',
-                        `Code: ${voucherCode}\n\nVoucher created but registration failed. Try adding it manually from "Add Voucher" menu.`,
-                        [{ text: 'OK' }]
-                      );
-                    }
-                  } else {
-                    Alert.alert('❌ Error', 'Failed to create voucher. Check backend connection.');
-                  }
-                } catch (error: any) {
-                  console.error('[Admin] ❌ Voucher creation error:', error);
-                  Alert.alert('❌ Error', error.message || 'Failed to create voucher');
-                }
-              }}
-            >
-              <Ionicons name="gift-outline" size={24} color={theme === 'dark' ? '#10B981' : '#059669'} />
-              <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#10B981' : '#059669' }]}>
-                🧪 Test Admin Voucher
-              </Text>
-            </TouchableOpacity>
-          )}
 
-          {/* Reset to Free Tier - REMOVED (kept for dev reference but disabled) */}
-          {false && __DEV__ && (
-            <TouchableOpacity 
-              style={styles.drawerItem} 
-              onPress={() => {
-                toggleDrawer();
-                resetToFreeTier();
-              }}
-            >
-              <Ionicons name="refresh-outline" size={24} color={theme === 'dark' ? '#F59E0B' : '#D97706'} />
-              <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#F59E0B' : '#D97706' }]}>
-                🔄 Reset to Free Tier
-              </Text>
-            </TouchableOpacity>
-          )}
-          
-          {/* Add Voucher */}
+          {/* 7. Add Voucher */}
           <TouchableOpacity 
             style={styles.drawerItem} 
+            activeOpacity={0.7}
             onPress={() => {
-              toggleDrawer();
-              setTimeout(() => setShowVoucherModal(true), 300);
-            }}
-          >
-            <Ionicons name="ticket-outline" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'} />
-            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#7DD3C0' : '#4A9B8F' }]}>
-              Add Voucher
+              triggerHaptic('medium');
+              openVoucherModal();
+            }}>
+            <Ionicons name="ticket-outline" size={24} color={theme === 'dark' ? '#F59E0B' : '#D97706'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#F59E0B' : '#D97706' }]}>
+              {getTranslation('addVoucher')}
             </Text>
           </TouchableOpacity>
-          
+
+          {/* 8. Flash Cards */}
           <TouchableOpacity 
             style={styles.drawerItem} 
+            activeOpacity={0.7}
             onPress={() => {
+              triggerHaptic('medium');
               toggleDrawer();
               // @ts-ignore
               navigation.navigate('LevelSelection');
@@ -1978,7 +2082,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
 
       {/* Header */}
       <View style={[styles.header, theme === 'light' && styles.headerLight]}>
-        <TouchableOpacity onPress={toggleDrawer}>
+        <TouchableOpacity 
+          onPress={toggleDrawer}
+          activeOpacity={0.7}
+        >
           <Ionicons name="menu" size={24} color={theme === 'dark' ? '#FFF' : '#1A1A1F'} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -2000,7 +2107,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           data={messages}
           keyExtractor={(item) => item.id}
           renderItem={renderMessage}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: keyboardHeight > 0 ? keyboardHeight - 50 : 120 }
+          ]}
           style={styles.list}
           ListEmptyComponent={renderEmpty}
           ListFooterComponent={isLoadingResponse ? renderSkeletonLoader : null}
@@ -2049,13 +2159,41 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
 
       {/* Composer */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
+        keyboardVerticalOffset={0}
         style={styles.composerKeyboard}
       >
         <View style={styles.composerContainer}>
-          {/* Dropup Menu */}
-          {showDropup && (
-            <View style={[styles.dropupMenu, theme === 'light' && styles.dropupMenuLight]}>
+          {/* Dropup Menu - Modal with backdrop */}
+          <Modal
+            visible={showDropup}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => setShowDropup(false)}
+          >
+            <Pressable 
+              style={styles.dropupBackdrop}
+              onPress={() => {
+                setShowDropup(false);
+                setShowModeSelector(false);
+              }}
+            >
+              <Pressable 
+                style={[styles.dropupMenuContainer]}
+                onPress={(e) => e.stopPropagation()}
+              >
+                <View style={[styles.dropupMenu, theme === 'light' && styles.dropupMenuLight]}>
+                  {/* Close Button - Top Left */}
+                  <TouchableOpacity 
+                    style={styles.dropupCloseButton}
+                    onPress={() => {
+                      setShowDropup(false);
+                      setShowModeSelector(false);
+                      triggerHaptic('light');
+                    }}
+                  >
+                    <Ionicons name="close" size={20} color="#EF4444" />
+                  </TouchableOpacity>
               {showModeSelector ? (
                 // Mode Selection List
                 <>
@@ -2104,7 +2242,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                             setTypingMessageId(assistantMsg.id);
                             
                             // Speak the intro
-                            ttsService.speak(roleplayIntro);
+                            const processedText = preprocessTextForTTS(roleplayIntro);
+                            Tts.speak(processedText);
                           } catch (error) {
                             console.log('[Roleplay] Error loading intro:', error);
                             setRoleplayMode(false);
@@ -2184,8 +2323,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                   </TouchableOpacity>
                 </>
               )}
-            </View>
-          )}
+                </View>
+              </Pressable>
+            </Pressable>
+          </Modal>
           
           <View style={[styles.composerInner, { paddingBottom: Math.max(insets.bottom, 12) }]}>
             {Platform.OS === 'ios' ? (
@@ -2193,9 +2334,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 <View style={[styles.inputRow, theme === 'light' && styles.inputRowLight]}>
                   <TouchableOpacity
                     style={styles.plusButton}
-                    onPress={() => setShowDropup(!showDropup)}
+                    onPress={() => setShowDropup(true)}
                   >
-                    <Ionicons name="add-circle" size={28} color="#4A6FA5" />
+                    <Ionicons 
+                      name="add-circle" 
+                      size={28} 
+                      color="#4A6FA5" 
+                    />
                   </TouchableOpacity>
                   <TextInput
                     ref={inputRef}
@@ -2207,6 +2352,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                     onSubmitEditing={handleSend}
                     returnKeyType="send"
                     multiline
+                    onFocus={() => {
+                      // Immediately scroll when keyboard opens - iOS
+                      flatListRef.current?.scrollToEnd({ animated: true });
+                      setTimeout(() => {
+                        flatListRef.current?.scrollToEnd({ animated: true });
+                      }, 300);
+                    }}
                   />
                   {input.trim() ? (
                     <TouchableOpacity
@@ -2334,24 +2486,39 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 {/* Idle state - no pulse animation */}
               </BlurView>
             ) : (
-              <View style={[styles.blur, styles.androidComposer]}>
-                <View style={styles.inputRow}>
+              // Android: Optimized solid background with gradient effect
+              <View style={[styles.blur, theme === 'dark' ? styles.androidComposer : styles.androidComposerLight]}>
+                <View style={[styles.inputRow, theme === 'light' && styles.inputRowLight]}>
                   <TouchableOpacity
                     style={styles.plusButton}
-                    onPress={() => setShowDropup(!showDropup)}
+                    onPress={() => {
+                      triggerHaptic('light');
+                      setShowDropup(true);
+                    }}
                   >
-                    <Ionicons name="add-circle" size={28} color="#4A6FA5" />
+                    <Ionicons 
+                      name="add-circle" 
+                      size={28} 
+                      color="#4A6FA5" 
+                    />
                   </TouchableOpacity>
                   <TextInput
                     ref={inputRef}
-                    style={styles.input}
+                    style={[styles.input, theme === 'light' && styles.inputLight]}
                     value={input}
                     onChangeText={setInput}
                     placeholder={getTranslation('askKspeaker')}
-                    placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                    placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
                     onSubmitEditing={handleSend}
                     returnKeyType="send"
                     multiline
+                    onFocus={() => {
+                      // Immediately scroll when keyboard opens - Android
+                      flatListRef.current?.scrollToEnd({ animated: true });
+                      setTimeout(() => {
+                        flatListRef.current?.scrollToEnd({ animated: true });
+                      }, 300);
+                    }}
                   />
                   {input.trim() ? (
                     <TouchableOpacity
@@ -2679,6 +2846,16 @@ const styles = StyleSheet.create({
   },
   androidComposer: {
     backgroundColor: '#2F2F2F',
+    // Android: Enhanced elevation for depth
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  androidComposerLight: {
+    backgroundColor: '#FFFFFF',
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   inputRow: {
     flexDirection: 'row',
@@ -2753,11 +2930,13 @@ const styles = StyleSheet.create({
     zIndex: 1000,
     borderRightWidth: 1,
     borderRightColor: 'rgba(255, 255, 255, 0.06)',
+    // iOS Shadow
     shadowColor: '#000',
     shadowOffset: { width: 4, height: 0 },
     shadowOpacity: 0.5,
     shadowRadius: 12,
-    elevation: 10,
+    // Android Shadow (elevation)
+    elevation: 16,
   },
   drawerHeader: {
     flexDirection: 'row',
@@ -2783,6 +2962,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     gap: 16,
+    // Android: Better press feedback
+    ...Platform.select({
+      android: {
+        elevation: 0,
+        backgroundColor: 'transparent',
+      },
+    }),
   },
   drawerItemActive: {
     backgroundColor: 'rgba(16, 185, 129, 0.15)',
@@ -2876,7 +3062,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#404040',
   },
   modalHeaderLight: {
     borderBottomColor: '#E5E5E5',
@@ -3000,14 +3189,29 @@ const styles = StyleSheet.create({
   plusButton: {
     marginRight: 8,
   },
-  dropupMenu: {
+  dropupBackdrop: {
     position: 'absolute',
-    bottom: '100%',
-    left: 20,
-    right: 20,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 120,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
+  },
+  dropupMenuContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 70,
+  },
+  dropupCloseButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 10,
+    padding: 4,
+  },
+  dropupMenu: {
     backgroundColor: '#1C1C1E',
     borderRadius: 16,
-    marginBottom: 8,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
     shadowColor: '#000',
@@ -3261,92 +3465,227 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     marginVertical: 4,
   },
+  // FAQ Styles
   faqItem: {
-    marginBottom: 20,
+    marginBottom: 24,
   },
   faqQuestion: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
     marginBottom: 8,
-    gap: 10,
   },
   faqQuestionText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#ECECEC',
+    flex: 1,
   },
   faqQuestionTextLight: {
     color: '#1A1A1F',
   },
   faqAnswer: {
-    fontSize: 15,
+    fontSize: 14,
     color: 'rgba(255, 255, 255, 0.8)',
-    lineHeight: 22,
+    lineHeight: 20,
+    marginLeft: 32,
   },
   faqAnswerLight: {
     color: 'rgba(0, 0, 0, 0.7)',
   },
-  supportLabel: {
-    fontSize: 16,
+  // Support Styles
+  supportSection: {
+    marginBottom: 24,
+  },
+  supportTitle: {
+    fontSize: 18,
     fontWeight: '600',
     color: '#ECECEC',
     marginBottom: 8,
+    textAlign: 'center',
   },
-  supportLabelLight: {
+  supportTitleLight: {
     color: '#1A1A1F',
   },
-  supportInput: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: '#ECECEC',
+  supportText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 20,
+    textAlign: 'center',
   },
-  supportInputLight: {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
-    color: '#1A1A1F',
-  },
-  supportTextarea: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: '#ECECEC',
-    textAlignVertical: 'top',
-  },
-  supportTextareaLight: {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
-    color: '#1A1A1F',
-  },
-  characterCount: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.6)',
-    textAlign: 'right',
-    marginTop: 4,
-  },
-  characterCountLight: {
-    color: 'rgba(0, 0, 0, 0.4)',
+  supportTextLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
   },
   supportButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 12,
+    backgroundColor: '#7DD3C0',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    marginVertical: 8,
+  },
+  supportButtonLight: {
     backgroundColor: '#4A6FA5',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginTop: 20,
-    gap: 8,
   },
   supportButtonDisabled: {
-    backgroundColor: 'rgba(74, 111, 165, 0.5)',
+    backgroundColor: 'rgba(125, 211, 192, 0.5)',
+    opacity: 0.6,
   },
   supportButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  supportInputContainer: {
+    marginBottom: 16,
+  },
+  supportInputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ECECEC',
+    marginBottom: 8,
+  },
+  supportInputLabelLight: {
+    color: '#1A1A1F',
+  },
+  supportInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#ECECEC',
+  },
+  supportInputLight: {
+    backgroundColor: 'rgba(0, 0, 0, 0.03)',
+    borderColor: 'rgba(0, 0, 0, 0.1)',
+    color: '#1A1A1F',
+  },
+  supportTextArea: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#ECECEC',
+    minHeight: 120,
+  },
+  supportInfoText: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.7)',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginVertical: 4,
+  },
+  supportDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginVertical: 20,
+  },
+  socialLinks: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 20,
+    marginTop: 12,
+  },
+  socialButton: {
+    padding: 8,
+  },
+  // Voucher Styles
+  voucherSection: {
+    marginBottom: 20,
+  },
+  voucherTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#ECECEC',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  voucherTitleLight: {
+    color: '#1A1A1F',
+  },
+  voucherText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  voucherTextLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
+  },
+  voucherInputContainer: {
+    marginVertical: 16,
+  },
+  voucherInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(125, 211, 192, 0.3)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#ECECEC',
+    textAlign: 'center',
+    fontWeight: '600',
+    letterSpacing: 2,
+  },
+  voucherInputLight: {
+    backgroundColor: '#F3F4F6',
+    borderColor: '#D1D5DB',
+    color: '#1A1A1F',
+  },
+  voucherButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: '#7DD3C0',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+  },
+  voucherButtonLight: {
+    backgroundColor: '#4A6FA5',
+  },
+  voucherButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  voucherDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginVertical: 24,
+  },
+  voucherInfoTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ECECEC',
+    marginBottom: 12,
+  },
+  voucherInfoTitleLight: {
+    color: '#1A1A1F',
+  },
+  voucherFeature: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 10,
+  },
+  voucherFeatureText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+  },
+  voucherFeatureTextLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
   },
 });
 
