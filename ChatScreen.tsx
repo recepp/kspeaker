@@ -75,8 +75,11 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
   const [displayedText, setDisplayedText] = useState('');
   const [showAboutModal, setShowAboutModal] = useState(false);
+  const [showFaqModal, setShowFaqModal] = useState(false);
+  const [showSupportModal, setShowSupportModal] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>(''); // Backend error message
   const [selectedLanguage, setSelectedLanguage] = useState<'en' | 'tr' | 'ar' | 'ru'>('en');
   const [quizMode, setQuizMode] = useState(false);
@@ -230,11 +233,21 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
   };
 
-  // Haptic feedback helper
+  // Haptic feedback helper - Cross-platform (Single Responsibility Principle)
   const triggerHaptic = (type: 'light' | 'medium' | 'heavy' = 'light') => {
-    if (Platform.OS === 'ios') {
-      const duration = type === 'light' ? 10 : type === 'medium' ? 20 : 30;
-      Vibration.vibrate(duration);
+    try {
+      if (Platform.OS === 'ios') {
+        // iOS: Short, precise vibrations
+        const duration = type === 'light' ? 10 : type === 'medium' ? 20 : 30;
+        Vibration.vibrate(duration);
+      } else if (Platform.OS === 'android') {
+        // Android: Vibration patterns for better feedback
+        const pattern = type === 'light' ? [0, 50] : type === 'medium' ? [0, 100] : [0, 150];
+        Vibration.vibrate(pattern);
+      }
+    } catch (error) {
+      // Graceful fallback if vibration permission denied
+      console.log('[Haptic] Vibration not available:', error);
     }
   };
 
@@ -455,6 +468,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       if (errorMsg.includes('NETWORK_ERROR') || errorMsg.includes('Network request failed')) {
         if (__DEV__) console.log('[Send] Error type: NETWORK_ERROR');
         setErrorMessage(getTranslation('networkError'));
+      } else if (errorMsg.includes('SERVICE_UNAVAILABLE') || errorMsg.includes('503')) {
+        console.log('[Send] Error type: SERVICE_UNAVAILABLE (503)');
+        setErrorMessage(getTranslation('serviceUnavailable'));
+      } else if (errorMsg.includes('SERVER_ERROR') || errorMsg.includes('500') || errorMsg.includes('502') || errorMsg.includes('504')) {
+        console.log('[Send] Error type: SERVER_ERROR (5xx)');
+        setErrorMessage(getTranslation('serverError'));
       } else if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Quota') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
         console.log('[Send] Error type: QUOTA_EXCEEDED (Gemini API)');
         setErrorMessage(getTranslation('quotaMessage'));
@@ -539,6 +558,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       if (errorMsg.includes('NETWORK_ERROR') || errorMsg.includes('Network request failed')) {
         if (__DEV__) console.log('[Voice] Error type: NETWORK_ERROR');
         setErrorMessage(getTranslation('networkError'));
+      } else if (errorMsg.includes('SERVICE_UNAVAILABLE') || errorMsg.includes('503')) {
+        console.log('[Voice] Error type: SERVICE_UNAVAILABLE (503)');
+        setErrorMessage(getTranslation('serviceUnavailable'));
+      } else if (errorMsg.includes('SERVER_ERROR') || errorMsg.includes('500') || errorMsg.includes('502') || errorMsg.includes('504')) {
+        console.log('[Voice] Error type: SERVER_ERROR (5xx)');
+        setErrorMessage(getTranslation('serverError'));
       } else if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Quota') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
         console.log('[Voice] Error type: QUOTA_EXCEEDED (Gemini API)');
         setErrorMessage(getTranslation('quotaMessage'));
@@ -585,8 +610,9 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     flatListRef.current?.scrollToEnd({ animated: true });
   };
 
-  // Drawer functions
+  // Drawer functions (Open/Closed Principle - easy to extend)
   const toggleDrawer = () => {
+    triggerHaptic('light'); // Haptic feedback on drawer toggle
     const toValue = drawerOpen ? -280 : 0;
     Animated.timing(drawerAnim, {
       toValue,
@@ -612,9 +638,24 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setTimeout(() => setShowAboutModal(true), 300);
   };
 
+  const openFaqModal = () => {
+    closeDrawer();
+    setTimeout(() => setShowFaqModal(true), 300);
+  };
+
+  const openSupportModal = () => {
+    closeDrawer();
+    setTimeout(() => setShowSupportModal(true), 300);
+  };
+
   const openLanguageModal = () => {
     closeDrawer();
     setTimeout(() => setShowLanguageModal(true), 300);
+  };
+
+  const openVoucherModal = () => {
+    closeDrawer();
+    setTimeout(() => setShowVoucherModal(true), 300);
   };
 
   const selectLanguage = async (lang: 'en' | 'tr' | 'ar' | 'ru') => {
@@ -660,7 +701,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       menu: { en: 'Menu', tr: 'Menü', ar: 'قائمة', ru: 'Меню' },
       settings: { en: 'Settings', tr: 'Ayarlar', ar: 'الإعدادات', ru: 'Настройки' },
       about: { en: 'About Kspeaker', tr: 'Kspeaker Hakkında', ar: 'حول Kspeaker', ru: 'О Kspeaker' },
+      faq: { en: 'FAQ', tr: 'Sık Sorulan Sorular', ar: 'الأسئلة الشائعة', ru: 'Часто задаваемые вопросы' },
+      support: { en: 'Support', tr: 'Destek', ar: 'الدعم', ru: 'Поддержка' },
       language: { en: 'Language', tr: 'Dil', ar: 'اللغة', ru: 'Язык' },
+      addVoucher: { en: 'Add Voucher', tr: 'Kupon Ekle', ar: 'إضافة قسيمة', ru: 'Добавить ваучер' },
       login: { en: 'Login', tr: 'Giriş Yap', ar: 'تسجيل الدخول', ru: 'Войти' },
       askKspeaker: { en: 'Ask Kspeaker...', tr: 'Kspeaker\'a sor...', ar: 'اسأل Kspeaker...', ru: 'Спросите Kspeaker...' },
       startConversation: { en: 'Start a conversation', tr: 'Sohbete başla', ar: 'ابدأ محادثة', ru: 'Начать разговор' },
@@ -692,6 +736,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       networkError: { en: 'No internet connection. Please check your network.', tr: 'İnternet bağlantısı yok. Lütfen ağınızı kontrol edin.', ar: 'لا يوجد اتصال بالإنترنت. يرجى فحص شبكتك.', ru: 'Нет интернет-соединения. Проверьте сеть.' },
       waitingApproval: { en: 'Service Temporarily Unavailable', tr: 'Servis Geçici Olarak Kullanılamıyor', ar: 'الخدمة غير متاحة مؤقتًا', ru: 'Сервис временно недоступен' },
       approvalMessage: { en: 'Our AI service is currently experiencing high demand. Please try again in a few moments.', tr: 'AI hizmetimiz şu anda yoğun talep yaşıyor. Lütfen birkaç dakika sonra tekrar deneyin.', ar: 'تواجه خدمة الذكاء الاصطناعي لدينا طلبًا كبيرًا حاليًا. يرجى المحاولة مرة أخرى بعد لحظات.', ru: 'Наш сервис ИИ в настоящее время испытывает высокий спрос. Попробуйте еще раз через несколько минут.' },
+      serviceUnavailable: { en: 'Backend service is temporarily unavailable. Please try again in a few minutes.', tr: 'Backend servisi geçici olarak kullanılamıyor. Lütfen birkaç dakika sonra tekrar deneyin.', ar: 'خدمة الخادم غير متاحة مؤقتًا. يرجى المحاولة مرة أخرى بعد بضع دقائق.', ru: 'Серверная служба временно недоступна. Попробуйте снова через несколько минут.' },
+      serverError: { en: 'Server error occurred. Our team has been notified. Please try again later.', tr: 'Sunucu hatası oluştu. Ekibimiz bilgilendirildi. Lütfen daha sonra tekrar deneyin.', ar: 'حدث خطأ في الخادم. تم إخطار فريقنا. يرجى المحاولة مرة أخرى لاحقًا.', ru: 'Произошла ошибка сервера. Наша команда уведомлена. Попробуйте позже.' },
       quotaExceeded: { en: 'Service Usage Limit Reached', tr: 'Servis Kullanım Limiti Doldu', ar: 'تم الوصول إلى حد استخدام الخدمة', ru: 'Достигнут лимит использования' },
       quotaMessage: { en: 'The AI service is currently at capacity. Please try again in a few minutes. We apologize for the inconvenience!', tr: 'AI servisi şu anda kapasite limitinde. Lütfen birkaç dakika sonra tekrar deneyin. Rahatsızlıktan dolayı özür dileriz!', ar: 'خدمة الذكاء الاصطناعي في السعة حاليًا. يرجى المحاولة مرة أخرى بعد بضع دقائق. نعتذر عن الإزعاج!', ru: 'Сервис ИИ в данный момент на пределе мощности. Попробуйте через несколько минут. Приносим извинения!' },
       rateLimitTitle: { en: 'Too Many Requests', tr: 'Çok Fazla İstek', ar: 'طلبات كثيرة جدًا', ru: 'Слишком много запросов' },
@@ -1346,6 +1392,236 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         </View>
       )}
 
+      {/* FAQ Modal */}
+      {showFaqModal && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
+            <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
+              <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('faq')}</Text>
+              <TouchableOpacity onPress={() => setShowFaqModal(false)}>
+                <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalBody}>
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Kspeaker nedir?' : 
+                     selectedLanguage === 'ar' ? 'ما هو Kspeaker؟' :
+                     selectedLanguage === 'ru' ? 'Что такое Kspeaker?' :
+                     'What is Kspeaker?'}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {selectedLanguage === 'tr' ? 'Kspeaker, İngilizce pratiği için tasarlanmış yapay zeka destekli bir asistanıdır.' :
+                   selectedLanguage === 'ar' ? 'Kspeaker هو مساعد مدعوم بالذكاء الاصطناعي لممارسة اللغة الإنجليزية.' :
+                   selectedLanguage === 'ru' ? 'Kspeaker - это AI-помощник для практики английского языка.' :
+                   'Kspeaker is an AI-powered assistant designed for English practice.'}
+                </Text>
+              </View>
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Sesli konuşma nasıl çalışır?' :
+                     selectedLanguage === 'ar' ? 'كيف تعمل المحادثة الصوتية؟' :
+                     selectedLanguage === 'ru' ? 'Как работает голосовой разговор?' :
+                     'How does voice conversation work?'}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {selectedLanguage === 'tr' ? 'Mikrofon butonuna basın ve konuşun. AI sizi dinler ve yanıt verir.' :
+                   selectedLanguage === 'ar' ? 'اضغط على زر الميكروفون وتحدث. يستمع الذكاء الاصطناعي ويستجيب.' :
+                   selectedLanguage === 'ru' ? 'Нажмите кнопку микрофона и говорите. ИИ слушает и отвечает.' :
+                   'Press the microphone button and speak. AI listens and responds.'}
+                </Text>
+              </View>
+              <View style={styles.faqItem}>
+                <View style={styles.faqQuestion}>
+                  <Ionicons name="help-circle" size={20} color="#7DD3C0" />
+                  <Text style={[styles.faqQuestionText, theme === 'light' && styles.faqQuestionTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Flash Cards nedir?' :
+                     selectedLanguage === 'ar' ? 'ما هي البطاقات التعليمية؟' :
+                     selectedLanguage === 'ru' ? 'Что такое флэш-карты?' :
+                     'What are Flash Cards?'}
+                  </Text>
+                </View>
+                <Text style={[styles.faqAnswer, theme === 'light' && styles.faqAnswerLight]}>
+                  {selectedLanguage === 'tr' ? 'Flash Cards kelime dağarcığınızı geliştirmek için etkileşimli kartlardır.' :
+                   selectedLanguage === 'ar' ? 'البطاقات التعليمية بطاقات تفاعلية لتحسين مفرداتك.' :
+                   selectedLanguage === 'ru' ? 'Флэш-карты - интерактивные карточки для улучшения словарного запаса.' :
+                   'Flash Cards are interactive cards to improve your vocabulary.'}
+                </Text>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      )}
+
+      {/* Support Modal */}
+      {showSupportModal && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
+            <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
+              <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('support')}</Text>
+              <TouchableOpacity onPress={() => setShowSupportModal(false)}>
+                <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              <View style={styles.supportSection}>
+                <Ionicons name="mail" size={48} color="#7DD3C0" style={{ alignSelf: 'center', marginBottom: 16 }} />
+                <Text style={[styles.supportTitle, theme === 'light' && styles.supportTitleLight]}>
+                  {selectedLanguage === 'tr' ? 'İletişime Geçin' :
+                   selectedLanguage === 'ar' ? 'اتصل بنا' :
+                   selectedLanguage === 'ru' ? 'Свяжитесь с нами' :
+                   'Get in Touch'}
+                </Text>
+                <Text style={[styles.supportText, theme === 'light' && styles.supportTextLight]}>
+                  {selectedLanguage === 'tr' ? 'Sorularınız için bizimle iletişime geçin.' :
+                   selectedLanguage === 'ar' ? 'اتصل بنا إذا كان لديك أسئلة.' :
+                   selectedLanguage === 'ru' ? 'Свяжитесь с нами, если у вас есть вопросы.' :
+                   'Contact us if you have any questions.'}
+                </Text>
+              </View>
+              <TouchableOpacity 
+                style={[styles.supportButton, theme === 'light' && styles.supportButtonLight]}
+                onPress={() => {
+                  Alert.alert('Email Support', 'support@kspeaker.com', [{ text: 'OK' }]);
+                }}
+              >
+                <Ionicons name="mail-outline" size={24} color="#FFFFFF" />
+                <Text style={styles.supportButtonText}>support@kspeaker.com</Text>
+              </TouchableOpacity>
+              <View style={styles.supportDivider} />
+              <View style={styles.supportSection}>
+                <Text style={[styles.supportTitle, theme === 'light' && styles.supportTitleLight]}>
+                  {selectedLanguage === 'tr' ? 'Yanıt Süresi' :
+                   selectedLanguage === 'ar' ? 'وقت الاستجابة' :
+                   selectedLanguage === 'ru' ? 'Время ответа' :
+                   'Response Time'}
+                </Text>
+                <Text style={[styles.supportText, theme === 'light' && styles.supportTextLight]}>
+                  {selectedLanguage === 'tr' ? 'Genellikle 24 saat içinde yanıt veririz.' :
+                   selectedLanguage === 'ar' ? 'نرد عادة في غضون 24 ساعة.' :
+                   selectedLanguage === 'ru' ? 'Обычно мы отвечаем в течение 24 часов.' :
+                   'We typically respond within 24 hours.'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Voucher Modal */}
+      {showVoucherModal && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
+            <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
+              <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('addVoucher')}</Text>
+              <TouchableOpacity onPress={() => setShowVoucherModal(false)}>
+                <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              <View style={styles.voucherSection}>
+                <Ionicons name="ticket" size={64} color="#7DD3C0" style={{ alignSelf: 'center', marginBottom: 16 }} />
+                <Text style={[styles.voucherTitle, theme === 'light' && styles.voucherTitleLight]}>
+                  {selectedLanguage === 'tr' ? 'Premium Erişim' :
+                   selectedLanguage === 'ar' ? 'الوصول المميز' :
+                   selectedLanguage === 'ru' ? 'Премиум доступ' :
+                   'Premium Access'}
+                </Text>
+                <Text style={[styles.voucherText, theme === 'light' && styles.voucherTextLight]}>
+                  {selectedLanguage === 'tr' ? 'Kupon kodunuzu girerek premium özelliklere erişim sağlayın. Sınırsız konuşma, gelişmiş AI modelleri ve daha fazlası!' :
+                   selectedLanguage === 'ar' ? 'أدخل رمز القسيمة للوصول إلى الميزات المميزة. محادثات غير محدودة ونماذج ذكاء اصطناعي متقدمة والمزيد!' :
+                   selectedLanguage === 'ru' ? 'Введите код ваучера для доступа к премиум функциям. Неограниченные разговоры, продвинутые AI модели и многое другое!' :
+                   'Enter your voucher code to access premium features. Unlimited conversations, advanced AI models, and more!'}
+                </Text>
+              </View>
+
+              <View style={styles.voucherInputContainer}>
+                <TextInput
+                  style={[styles.voucherInput, theme === 'light' && styles.voucherInputLight]}
+                  placeholder={selectedLanguage === 'tr' ? 'Kupon kodunu girin' :
+                              selectedLanguage === 'ar' ? 'أدخل رمز القسيمة' :
+                              selectedLanguage === 'ru' ? 'Введите код ваучера' :
+                              'Enter voucher code'}
+                  placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                  autoCapitalize="characters"
+                  maxLength={32}
+                />
+              </View>
+
+              <TouchableOpacity 
+                style={[styles.voucherButton, theme === 'light' && styles.voucherButtonLight]}
+                onPress={() => {
+                  // Voucher activation logic
+                  Alert.alert(
+                    selectedLanguage === 'tr' ? 'Kupon Aktivasyonu' :
+                    selectedLanguage === 'ar' ? 'تفعيل القسيمة' :
+                    selectedLanguage === 'ru' ? 'Активация ваучера' :
+                    'Voucher Activation',
+                    selectedLanguage === 'tr' ? 'Kupon sistemi yakında aktif olacak!' :
+                    selectedLanguage === 'ar' ? 'نظام القسائم سيكون نشطًا قريبًا!' :
+                    selectedLanguage === 'ru' ? 'Система ваучеров скоро будет активна!' :
+                    'Voucher system coming soon!',
+                    [{ text: 'OK', onPress: () => setShowVoucherModal(false) }]
+                  );
+                }}
+              >
+                <Ionicons name="checkmark-circle" size={24} color="#FFFFFF" />
+                <Text style={styles.voucherButtonText}>
+                  {selectedLanguage === 'tr' ? 'Kuponu Aktifleştir' :
+                   selectedLanguage === 'ar' ? 'تفعيل القسيمة' :
+                   selectedLanguage === 'ru' ? 'Активировать' :
+                   'Activate Voucher'}
+                </Text>
+              </TouchableOpacity>
+
+              <View style={styles.voucherDivider} />
+
+              <View style={styles.voucherSection}>
+                <Text style={[styles.voucherInfoTitle, theme === 'light' && styles.voucherInfoTitleLight]}>
+                  {selectedLanguage === 'tr' ? '💎 Premium Özellikler' :
+                   selectedLanguage === 'ar' ? '💎 الميزات المميزة' :
+                   selectedLanguage === 'ru' ? '💎 Премиум функции' :
+                   '💎 Premium Features'}
+                </Text>
+                <View style={styles.voucherFeature}>
+                  <Ionicons name="infinite" size={20} color="#7DD3C0" />
+                  <Text style={[styles.voucherFeatureText, theme === 'light' && styles.voucherFeatureTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Sınırsız konuşma' :
+                     selectedLanguage === 'ar' ? 'محادثات غير محدودة' :
+                     selectedLanguage === 'ru' ? 'Неограниченные разговоры' :
+                     'Unlimited conversations'}
+                  </Text>
+                </View>
+                <View style={styles.voucherFeature}>
+                  <Ionicons name="trending-up" size={20} color="#7DD3C0" />
+                  <Text style={[styles.voucherFeatureText, theme === 'light' && styles.voucherFeatureTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Gelişmiş AI modelleri' :
+                     selectedLanguage === 'ar' ? 'نماذج ذكاء اصطناعي متقدمة' :
+                     selectedLanguage === 'ru' ? 'Продвинутые AI модели' :
+                     'Advanced AI models'}
+                  </Text>
+                </View>
+                <View style={styles.voucherFeature}>
+                  <Ionicons name="flash" size={20} color="#7DD3C0" />
+                  <Text style={[styles.voucherFeatureText, theme === 'light' && styles.voucherFeatureTextLight]}>
+                    {selectedLanguage === 'tr' ? 'Öncelikli yanıt süresi' :
+                     selectedLanguage === 'ar' ? 'وقت استجابة ذو أولوية' :
+                     selectedLanguage === 'ru' ? 'Приоритетное время ответа' :
+                     'Priority response time'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* Drawer Menu */}
       {drawerOpen && (
         <TouchableOpacity 
@@ -1361,33 +1637,104 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         theme === 'light' && styles.drawerLight,
       ]}>
         <View style={styles.drawerContent}>
-          <TouchableOpacity style={styles.drawerItem} onPress={() => {
-            setShowSettingsModal(true);
-            toggleDrawer();
-          }}>
+          {/* 1. Settings */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              setShowSettingsModal(true);
+              toggleDrawer();
+            }}>
             <Ionicons name="settings-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('settings')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.drawerItem} onPress={openAboutModal}>
+
+          {/* 2. About Kspeaker */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openAboutModal();
+            }}>
             <Ionicons name="information-circle-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('about')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.drawerItem} onPress={openLanguageModal}>
+
+          {/* 3. FAQ */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openFaqModal();
+            }}>
+            <Ionicons name="help-circle-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('faq')}</Text>
+          </TouchableOpacity>
+
+          {/* 4. Support */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openSupportModal();
+            }}>
+            <Ionicons name="mail-outline" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('support')}</Text>
+          </TouchableOpacity>
+
+          {/* 5. Language */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('light');
+              openLanguageModal();
+            }}>
             <Ionicons name="language" size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>{getTranslation('language')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.drawerItem} onPress={toggleTheme}>
+
+          {/* 6. Light Mode / Dark Mode Toggle */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('medium');
+              toggleTheme();
+            }}>
             <Ionicons name={theme === 'dark' ? 'sunny' : 'moon'} size={24} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
             <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight]}>
               {theme === 'dark' ? getTranslation('lightMode') : getTranslation('darkMode')}
             </Text>
           </TouchableOpacity>
           
-          {/* Flash Cards */}
+          {/* Divider */}
           <View style={styles.drawerDivider} />
+
+          {/* 7. Add Voucher */}
           <TouchableOpacity 
             style={styles.drawerItem} 
+            activeOpacity={0.7}
             onPress={() => {
+              triggerHaptic('medium');
+              openVoucherModal();
+            }}>
+            <Ionicons name="ticket-outline" size={24} color={theme === 'dark' ? '#F59E0B' : '#D97706'} />
+            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#F59E0B' : '#D97706' }]}>
+              {getTranslation('addVoucher')}
+            </Text>
+          </TouchableOpacity>
+
+          {/* 8. Flash Cards */}
+          <TouchableOpacity 
+            style={styles.drawerItem} 
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('medium');
               toggleDrawer();
               // @ts-ignore
               navigation.navigate('LevelSelection');
@@ -1398,21 +1745,15 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
               Flash Cards
             </Text>
           </TouchableOpacity>
-          
-          {/* Login */}
-          <View style={styles.drawerDivider} />
-          <TouchableOpacity style={styles.drawerItem} onPress={handleLogin}>
-            <Ionicons name="log-in-outline" size={24} color={theme === 'dark' ? '#4ECDC4' : '#2E8B8B'} />
-            <Text style={[styles.drawerItemText, theme === 'light' && styles.drawerItemTextLight, { color: theme === 'dark' ? '#4ECDC4' : '#2E8B8B' }]}>
-              {getTranslation('login')}
-            </Text>
-          </TouchableOpacity>
         </View>
       </Animated.View>
 
       {/* Header */}
       <View style={[styles.header, theme === 'light' && styles.headerLight]}>
-        <TouchableOpacity onPress={toggleDrawer}>
+        <TouchableOpacity 
+          onPress={toggleDrawer}
+          activeOpacity={0.7}
+        >
           <Ionicons name="menu" size={24} color={theme === 'dark' ? '#FFF' : '#1A1A1F'} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -1769,21 +2110,25 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 {/* Idle state - no pulse animation */}
               </BlurView>
             ) : (
-              <View style={[styles.blur, styles.androidComposer]}>
-                <View style={styles.inputRow}>
+              // Android: Optimized solid background with gradient effect
+              <View style={[styles.blur, theme === 'dark' ? styles.androidComposer : styles.androidComposerLight]}>
+                <View style={[styles.inputRow, theme === 'light' && styles.inputRowLight]}>
                   <TouchableOpacity
                     style={styles.plusButton}
-                    onPress={() => setShowDropup(!showDropup)}
+                    onPress={() => {
+                      triggerHaptic('light');
+                      setShowDropup(!showDropup);
+                    }}
                   >
                     <Ionicons name="add-circle" size={28} color="#4A6FA5" />
                   </TouchableOpacity>
                   <TextInput
                     ref={inputRef}
-                    style={styles.input}
+                    style={[styles.input, theme === 'light' && styles.inputLight]}
                     value={input}
                     onChangeText={setInput}
                     placeholder={getTranslation('askKspeaker')}
-                    placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                    placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
                     onSubmitEditing={handleSend}
                     returnKeyType="send"
                     multiline
@@ -2114,6 +2459,16 @@ const styles = StyleSheet.create({
   },
   androidComposer: {
     backgroundColor: '#2F2F2F',
+    // Android: Enhanced elevation for depth
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  androidComposerLight: {
+    backgroundColor: '#FFFFFF',
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   inputRow: {
     flexDirection: 'row',
@@ -2188,11 +2543,13 @@ const styles = StyleSheet.create({
     zIndex: 1000,
     borderRightWidth: 1,
     borderRightColor: 'rgba(255, 255, 255, 0.06)',
+    // iOS Shadow
     shadowColor: '#000',
     shadowOffset: { width: 4, height: 0 },
     shadowOpacity: 0.5,
     shadowRadius: 12,
-    elevation: 10,
+    // Android Shadow (elevation)
+    elevation: 16,
   },
   drawerHeader: {
     flexDirection: 'row',
@@ -2218,6 +2575,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     gap: 16,
+    // Android: Better press feedback
+    ...Platform.select({
+      android: {
+        elevation: 0,
+        backgroundColor: 'transparent',
+      },
+    }),
   },
   drawerItemActive: {
     backgroundColor: 'rgba(16, 185, 129, 0.15)',
@@ -2698,6 +3062,179 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     marginVertical: 4,
+  },
+  // FAQ Styles
+  faqItem: {
+    marginBottom: 24,
+  },
+  faqQuestion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 8,
+  },
+  faqQuestionText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ECECEC',
+    flex: 1,
+  },
+  faqQuestionTextLight: {
+    color: '#1A1A1F',
+  },
+  faqAnswer: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 20,
+    marginLeft: 32,
+  },
+  faqAnswerLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
+  },
+  // Support Styles
+  supportSection: {
+    marginBottom: 24,
+  },
+  supportTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ECECEC',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  supportTitleLight: {
+    color: '#1A1A1F',
+  },
+  supportText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  supportTextLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
+  },
+  supportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: '#7DD3C0',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    marginVertical: 8,
+  },
+  supportButtonLight: {
+    backgroundColor: '#4A6FA5',
+  },
+  supportButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  supportDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginVertical: 20,
+  },
+  socialLinks: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 20,
+    marginTop: 12,
+  },
+  socialButton: {
+    padding: 8,
+  },
+  // Voucher Styles
+  voucherSection: {
+    marginBottom: 20,
+  },
+  voucherTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#ECECEC',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  voucherTitleLight: {
+    color: '#1A1A1F',
+  },
+  voucherText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  voucherTextLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
+  },
+  voucherInputContainer: {
+    marginVertical: 16,
+  },
+  voucherInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(125, 211, 192, 0.3)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#ECECEC',
+    textAlign: 'center',
+    fontWeight: '600',
+    letterSpacing: 2,
+  },
+  voucherInputLight: {
+    backgroundColor: '#F3F4F6',
+    borderColor: '#D1D5DB',
+    color: '#1A1A1F',
+  },
+  voucherButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: '#7DD3C0',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+  },
+  voucherButtonLight: {
+    backgroundColor: '#4A6FA5',
+  },
+  voucherButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  voucherDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginVertical: 24,
+  },
+  voucherInfoTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ECECEC',
+    marginBottom: 12,
+  },
+  voucherInfoTitleLight: {
+    color: '#1A1A1F',
+  },
+  voucherFeature: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 10,
+  },
+  voucherFeatureText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+  },
+  voucherFeatureTextLight: {
+    color: 'rgba(0, 0, 0, 0.7)',
   },
 });
 

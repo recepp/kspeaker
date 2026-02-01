@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1028871379566",
+    "project_id": "kspeaker-f8b0a",
+    "storage_bucket": "kspeaker-f8b0a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1028871379566:android:PLACEHOLDER_ANDROID_APP_ID",
+        "android_client_info": {
+          "package_name": "com.kspeaker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBQbjd2jPIt0LpDIr3iSgcvUEKq7XfbDp0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

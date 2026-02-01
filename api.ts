@@ -63,8 +63,6 @@ export async function registerUser(email: string): Promise<boolean> {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
-        email,
-        apiKey: 'kartezya-kspeaker-beta'
       }),
     });
 
@@ -106,9 +104,24 @@ export async function sendChatMessage(text: string, conversationMode?: string): 
       
       if (__DEV__) console.log('[API] Response status:', response.status);
       
+      // Check for service unavailable (503)
+      if (response.status === 503) {
+        throw new Error('SERVICE_UNAVAILABLE');
+      }
+      
       // Check for rate limit error (429)
       if (response.status === 429) {
         throw new Error('RATE_LIMIT_EXCEEDED');
+      }
+      
+      // Check for server errors (500-599)
+      if (response.status >= 500 && response.status < 600) {
+        throw new Error('SERVER_ERROR');
+      }
+      
+      // Check for bad request (400-499)
+      if (!response.ok && response.status >= 400 && response.status < 500) {
+        throw new Error(`HTTP_ERROR_${response.status}`);
       }
       
       // Try to parse JSON response
