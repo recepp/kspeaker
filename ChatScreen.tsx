@@ -4,7 +4,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native';
 import { sendChatMessage, initializeApi, registerUser } from './api';
 import { checkRegistration, saveRegistration, clearRegistration } from './registration';
-import { EmailRegistrationModal } from './components/EmailRegistrationModal';
 import { startListening, stopListening } from './speech';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Tts from 'react-native-tts';
@@ -69,7 +68,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Simple state - GPT style
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [showEmailModal, setShowEmailModal] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isLoadingResponse, setIsLoadingResponse] = useState(false);
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
@@ -96,6 +94,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const scrollButtonAnim = useRef(new Animated.Value(0)).current;
   
@@ -122,7 +121,32 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
   }, [voiceState]);
 
-  // Load theme and language from storage
+  // Keyboard event listeners
+  useEffect(() => {
+    const keyboardWillShow = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setKeyboardHeight(e.endCoordinates.height);
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    );
+    
+    const keyboardWillHide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setKeyboardHeight(0);
+      }
+    );
+    
+    return () => {
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
+    };
+  }, []);
+
+  // Load theme, language and auto-register on app start
   useEffect(() => {
     const loadTheme = async () => {
       try {
@@ -147,8 +171,37 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       }
     };
     
+    const autoRegister = async () => {
+      try {
+        // Initialize API first
+        await initializeApi();
+        
+        // Check if already registered
+        const registration = await checkRegistration();
+        if (registration) {
+          console.log('[Registration] Already registered');
+          return;
+        }
+        
+        // Auto-register without email/voucher (free tier)
+        console.log('[Registration] Auto-registering device...');
+        const success = await registerUser();
+        
+        if (success) {
+          // Save registration locally
+          await saveRegistration('');
+          console.log('[Registration] Auto-registration successful');
+        } else {
+          console.error('[Registration] Auto-registration failed');
+        }
+      } catch (error) {
+        console.error('[Registration] Auto-registration error:', error);
+      }
+    };
+    
     loadTheme();
     loadLanguage();
+    autoRegister();
   }, []);
 
   // Dil değiştiğinde bildirimleri güncelle
@@ -687,15 +740,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setTypingMessageId(assistantMsg.id);
   };
 
-  // Login: Reset registration to show email modal
-  const handleLogin = async () => {
-    console.log('[Login] Clearing registration...');
-    await clearRegistration();
-    setShowEmailModal(true);
-    closeDrawer();
-    console.log('[Login] Email modal opened for new login');
-  };
-
   const getTranslation = (key: string) => {
     const translations: { [key: string]: { en: string; tr: string; ar: string; ru: string } } = {
       menu: { en: 'Menu', tr: 'Menü', ar: 'قائمة', ru: 'Меню' },
@@ -756,8 +800,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   
   const startVoiceConversation = (isRetry = false) => {
     if (__DEV__) console.log('[Voice] 🎙️ Starting conversation mode, isRetry:', isRetry);
+    console.log('[Voice] 📍 Before setVoiceState - current:', voiceState);
     setVoiceState('listening');
     voiceStateRef.current = 'listening';
+    console.log('[Voice] 📍 After setVoiceState - should be listening');
     
     // Only reset flags on fresh start, not on retry
     if (!isRetry) {
@@ -766,6 +812,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
     
     currentVoiceText.current = '';
+    console.log('[Voice] 📍 About to call startListening from speech.ts');
     
     let hasReceivedText = false;
     
@@ -881,10 +928,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     
     console.log('[Mic] 🔘 Button pressed, current state:', voiceState);
     console.log('[Mic] 🔘 Ref state:', voiceStateRef.current);
+    console.log('[Mic] 🔘 User stopped flag:', userStoppedVoice.current);
     
     if (voiceStateRef.current === 'idle') {
       // Start conversation
       console.log('[Mic] ▶️ Starting voice conversation');
+      console.log('[Mic] 🎤 Calling startVoiceConversation...');
       startVoiceConversation();
     } else {
       // Stop conversation (any state: listening, processing, or speaking)
@@ -1026,12 +1075,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Initialize
   useEffect(() => {
     const init = async () => {
-      await initializeApi();
-      const registered = await checkRegistration();
-      if (!registered) {
-        setShowEmailModal(true);
-      }
-      
       // Bildirim durumunu yükle veya ilk kez açılıyorsa otomatik aç
       try {
         const notifEnabled = await AsyncStorage.getItem('notificationsEnabled');
@@ -1072,15 +1115,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       });
     }
   }, [messages.length]);
-
-  const handleEmailSubmit = async (email: string) => {
-    const success = await registerUser(email);
-    if (success) {
-      await saveRegistration(email);
-      setShowEmailModal(false);
-    }
-    return success;
-  };
 
   const renderSkeletonLoader = () => {
     const shimmerTranslate = shimmerAnim.interpolate({
@@ -1168,8 +1202,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
 
   return (
     <SafeAreaView style={[styles.container, theme === 'light' && styles.containerLight]} edges={['top', 'bottom']}>
-      <EmailRegistrationModal visible={showEmailModal} onSubmit={handleEmailSubmit} />
-
       {/* About Modal */}
       {showAboutModal && (
         <View style={styles.modalOverlay}>
@@ -1775,7 +1807,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           data={messages}
           keyExtractor={(item) => item.id}
           renderItem={renderMessage}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: keyboardHeight > 0 ? keyboardHeight - 50 : 120 }
+          ]}
           style={styles.list}
           ListEmptyComponent={renderEmpty}
           ListFooterComponent={isLoadingResponse ? renderSkeletonLoader : null}
@@ -1824,7 +1859,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
 
       {/* Composer */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
+        keyboardVerticalOffset={0}
         style={styles.composerKeyboard}
       >
         <View style={styles.composerContainer}>
@@ -1983,6 +2019,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                     onSubmitEditing={handleSend}
                     returnKeyType="send"
                     multiline
+                    onFocus={() => {
+                      // Immediately scroll when keyboard opens - iOS
+                      flatListRef.current?.scrollToEnd({ animated: true });
+                      setTimeout(() => {
+                        flatListRef.current?.scrollToEnd({ animated: true });
+                      }, 300);
+                    }}
                   />
                   {input.trim() ? (
                     <TouchableOpacity
@@ -2132,6 +2175,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                     onSubmitEditing={handleSend}
                     returnKeyType="send"
                     multiline
+                    onFocus={() => {
+                      // Immediately scroll when keyboard opens - Android
+                      flatListRef.current?.scrollToEnd({ animated: true });
+                      setTimeout(() => {
+                        flatListRef.current?.scrollToEnd({ animated: true });
+                      }, 300);
+                    }}
                   />
                   {input.trim() ? (
                     <TouchableOpacity

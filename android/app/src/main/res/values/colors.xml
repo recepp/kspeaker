@@ -11,4 +11,7 @@
     <!-- Background colors -->
     <color name="background_dark">#1A1A1F</color>
     <color name="background_light">#FFFFFF</color>
+    
+    <!-- Launcher icon colors -->
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>
