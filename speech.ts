@@ -417,25 +417,31 @@ class VoiceEventService {
     Voice.removeAllListeners();
     
     Voice.onSpeechStart = () => {
-      log.info('Voice', 'Speech started');
+      log.info('Voice', 'Speech started - mic is active');
       stateManager.setListening(true);
       // Reset error count on successful start
       stateManager.resetAudioFormatErrorCount();
     };
 
+    Voice.onSpeechRecognized = () => {
+      log.info('Voice', 'Speech recognized - got audio input');
+    };
+
     Voice.onSpeechResults = (event: SpeechResultsEvent) => {
       const callbacks = stateManager.getState().callbacks;
       if (event.value && event.value.length > 0 && callbacks?.onResult) {
-        log.info('Voice', 'Results', event.value[0]);
-        callbacks.onResult(event.value[0]);
+        const result = event.value[0];
+        log.info('Voice', `Final result: "${result}"`);
+        callbacks.onResult(result);
       }
     };
 
     Voice.onSpeechPartialResults = (event: SpeechResultsEvent) => {
       const callbacks = stateManager.getState().callbacks;
       if (event.value && event.value.length > 0 && callbacks?.onResult) {
-        log.info('Voice', 'Partial', event.value[0]);
-        callbacks.onResult(event.value[0]);
+        const partial = event.value[0];
+        log.info('Voice', `Partial: "${partial}"`);
+        callbacks.onResult(partial);
       }
     };
 

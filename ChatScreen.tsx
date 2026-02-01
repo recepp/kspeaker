@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView, Switch, Alert } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Platform, KeyboardAvoidingView, Keyboard, Animated, Dimensions, useWindowDimensions, Vibration, ScrollView, Switch, Alert, Modal, Pressable, PermissionsAndroid, Linking } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { sendChatMessage, initializeApi, registerUser } from './api';
@@ -11,6 +11,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import { BlurView } from '@react-native-community/blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NotificationService from './notificationService';
+import { logError, logInfo, logWarning } from './logger';
 
 type Theme = 'dark' | 'light';
 type Role = 'user' | 'assistant';
@@ -77,6 +78,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const [showSupportModal, setShowSupportModal] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [supportEmail, setSupportEmail] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>(''); // Backend error message
   const [selectedLanguage, setSelectedLanguage] = useState<'en' | 'tr' | 'ar' | 'ru'>('en');
@@ -232,54 +235,113 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
   };
 
+  // Check Android notification permission (Android 13+)
+  const checkAndroidNotificationPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    
+    try {
+      // Android 13+ (API 33+) requires runtime permission
+      if (Platform.Version >= 33) {
+        const granted = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        );
+        console.log('[Notifications] 🔔 Android permission check:', granted);
+        return granted;
+      }
+      return true; // Android < 13 doesn't require runtime permission
+    } catch (error) {
+      console.error('[Notifications] ❌ Permission check error:', error);
+      return false;
+    }
+  };
+
+  // Request Android notification permission (Android 13+)
+  const requestAndroidNotificationPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    
+    try {
+      // Android 13+ (API 33+) requires runtime permission
+      if (Platform.Version >= 33) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        );
+        console.log('[Notifications] 📲 Android permission request result:', granted);
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      }
+      return true; // Android < 13 doesn't require runtime permission
+    } catch (error) {
+      console.error('[Notifications] ❌ Permission request error:', error);
+      return false;
+    }
+  };
+
   // Toggle notifications
   const toggleNotifications = async () => {
     const newValue = !notificationsEnabled;
-    setNotificationsEnabled(newValue);
     
     try {
       if (newValue) {
-        console.log('[Notifications] 📲 Requesting permissions...');
-        // Bildirim izni iste
-        const permissions = await NotificationService.requestPermissions();
-        console.log('[Notifications] 📲 Permission result:', permissions);
+        console.log('[Notifications] 📲 Enabling notifications...');
         
-        if (permissions) {
-          console.log('[Notifications] ✅ Permission granted, scheduling...');
-          
-          // Günlük hatırlatıcıları seçili dilde ayarla
+        // Android 13+ için önce izin kontrolü yap
+        const hasPermission = await checkAndroidNotificationPermission();
+        
+        if (hasPermission) {
+          // İzin zaten verilmiş, direkt aktif et
+          console.log('[Notifications] ✅ Permission already granted');
+          setNotificationsEnabled(true);
           NotificationService.scheduleDailyReminders(selectedLanguage);
+          await AsyncStorage.setItem('notificationsEnabled', 'true');
           
-          // Zamanlanmış bildirimleri kontrol et
           setTimeout(() => {
             NotificationService.checkScheduledNotifications();
           }, 1000);
           
-          // Bildirim metnini seçili dile göre al
           const notificationText = NotificationService.getNotificationText(selectedLanguage);
-          
           Alert.alert(
             notificationText.title,
             notificationText.message,
             [{ text: notificationText.button, style: 'default' }]
           );
         } else {
-          console.log('[Notifications] ❌ Permission denied');
-          setNotificationsEnabled(false);
-          Alert.alert(
-            'İzin Gerekli',
-            'Bildirimler için lütfen ayarlardan izin verin.',
-            [{ text: 'Tamam' }]
-          );
+          // İzin yok, iste
+          console.log('[Notifications] 📲 Requesting permission...');
+          const granted = await requestAndroidNotificationPermission();
+          
+          if (granted) {
+            console.log('[Notifications] ✅ Permission granted, scheduling...');
+            setNotificationsEnabled(true);
+            NotificationService.scheduleDailyReminders(selectedLanguage);
+            await AsyncStorage.setItem('notificationsEnabled', 'true');
+            
+            setTimeout(() => {
+              NotificationService.checkScheduledNotifications();
+            }, 1000);
+            
+            const notificationText = NotificationService.getNotificationText(selectedLanguage);
+            Alert.alert(
+              notificationText.title,
+              notificationText.message,
+              [{ text: notificationText.button, style: 'default' }]
+            );
+          } else {
+            console.log('[Notifications] ❌ Permission denied');
+            setNotificationsEnabled(false);
+            Alert.alert(
+              'İzin Gerekli',
+              'Bildirimler için lütfen ayarlardan izin verin.',
+              [{ text: 'Tamam' }]
+            );
+          }
         }
       } else {
         // Bildirimleri kapat
         console.log('[Notifications] 🔕 Disabling notifications...');
+        setNotificationsEnabled(false);
         NotificationService.cancelAllNotifications();
+        await AsyncStorage.setItem('notificationsEnabled', 'false');
         Alert.alert('🔕 Bildirimler Kapatıldı', 'Artık hatırlatma almayacaksın.');
       }
-      
-      await AsyncStorage.setItem('notificationsEnabled', JSON.stringify(newValue));
     } catch (error) {
       console.error('[Notifications] ❌ Error:', error);
       setNotificationsEnabled(false);
@@ -852,12 +914,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     
     startListening(
       (text) => {
-        // On speech result
+        // On speech result (both partial and final)
+        console.log('[Voice] 📥 Got text:', text.substring(0, 50));
         currentVoiceText.current = text;
         
-        if (!hasReceivedText) {
+        if (!hasReceivedText && text.length > 0) {
           hasReceivedText = true;
-          console.log('[Voice] 🎤 First text received');
+          console.log('[Voice] 🎬 First text received - user is speaking');
         }
         
         resetTimer();
@@ -865,6 +928,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       () => {
         // On error - don't try to JSON.stringify the error object, it crashes!
         console.log('[Voice] ❌ Speech recognition error occurred');
+        console.log('[Voice] 📊 Voice state:', voiceStateRef.current);
+        console.log('[Voice] 📊 Retry count:', voiceRetryCount.current);
         
         if (silenceTimer.current) {
           clearTimeout(silenceTimer.current);
@@ -891,6 +956,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       }
     );
     
+    console.log('[Voice] 🔄 Reset timer initialized');
     resetTimer();
   };
   
@@ -941,6 +1007,25 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       stopVoiceConversation();
     }
   };
+
+  // Initialize Voice Recognition on mount (Android needs explicit initialization)
+  useEffect(() => {
+    const initVoice = async () => {
+      try {
+        console.log('[Voice] 🎤 Initializing voice recognition...');
+        const { initializeVoice } = await import('./speech');
+        const initialized = await initializeVoice();
+        if (initialized) {
+          console.log('[Voice] ✅ Voice recognition initialized successfully');
+        } else {
+          console.log('[Voice] ⚠️ Voice initialization failed - permissions may be denied');
+        }
+      } catch (error) {
+        console.error('[Voice] ❌ Voice initialization error:', error);
+      }
+    };
+    initVoice();
+  }, []);
 
   // TTS Events - Integrated with voice conversation
   useEffect(() => {
@@ -1004,6 +1089,20 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         console.log(`[TTS] ✅ Using first enhanced voice: ${selectedVoice.name}`);
       }
       
+      // Android-specific: Look for Google TTS voices (highest quality)
+      if (!selectedVoice && Platform.OS === 'android') {
+        const googleVoices = voices.filter((v: any) => 
+          v.language === 'en-US' && 
+          (v.name.includes('Google') || v.name.includes('en-us-'))
+        );
+        
+        if (googleVoices.length > 0) {
+          // Prefer en-us-x-sfg (female, high quality)
+          selectedVoice = googleVoices.find((v: any) => v.name.includes('sfg')) || googleVoices[0];
+          console.log(`[TTS] 🤖 Using Google TTS voice: ${selectedVoice.name}`);
+        }
+      }
+      
       // Final fallback: Any decent en-US female voice
       if (!selectedVoice) {
         selectedVoice = voices.find((v: any) => 
@@ -1024,10 +1123,15 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       }
       
       // CRITICAL: Speech parameters for human-like, non-robotic speech
-      // Lower rate = more natural with better prosody and emphasis
-      // Pitch variations handled by premium voices automatically
-      Tts.setDefaultRate(0.50);     // Optimal conversational speed (0.40-0.55 range)
-      Tts.setDefaultPitch(1.0);     // Natural pitch (0.5-2.0 range, 1.0 = normal)
+      // Android: Slightly faster rate for Google TTS (sounds more natural)
+      // iOS: Slower rate for better clarity
+      const optimalRate = Platform.OS === 'android' ? 0.55 : 0.50;
+      const optimalPitch = Platform.OS === 'android' ? 1.05 : 1.0;
+      
+      Tts.setDefaultRate(optimalRate);     // Optimal conversational speed
+      Tts.setDefaultPitch(optimalPitch);   // Natural pitch
+      
+      console.log(`[TTS] 🎚️ Platform: ${Platform.OS}, Rate: ${optimalRate}, Pitch: ${optimalPitch}`);
       
       // iOS specific: Set high quality audio
       if (Platform.OS === 'ios') {
@@ -1075,22 +1179,36 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // Initialize
   useEffect(() => {
     const init = async () => {
-      // Bildirim durumunu yükle veya ilk kez açılıyorsa otomatik aç
+      // Bildirim durumunu yükle
       try {
         const notifEnabled = await AsyncStorage.getItem('notificationsEnabled');
         if (notifEnabled === null) {
           // İlk kez açılıyor, otomatik olarak bildirimleri aç
-          const permissions = await NotificationService.requestPermissions();
-          if (permissions) {
+          const hasPermission = await checkAndroidNotificationPermission();
+          if (hasPermission) {
+            // İzin zaten var, direkt aktif et
             setNotificationsEnabled(true);
             NotificationService.scheduleDailyReminders(selectedLanguage);
             await AsyncStorage.setItem('notificationsEnabled', 'true');
-            console.log('[Notifications] 🔔 Auto-enabled on first launch');
+            console.log('[Notifications] 🔔 Auto-enabled with existing permission');
+          } else {
+            // İzin yok, kullanıcı manuel açacak
+            console.log('[Notifications] ⏳ Waiting for user to enable notifications');
           }
         } else if (notifEnabled === 'true') {
-          setNotificationsEnabled(true);
-          // Mevcut bildirimleri kontrol et, yoksa yeniden ayarla
-          NotificationService.checkScheduledNotifications();
+          // Önceden aktif edilmiş, izin kontrolü yap
+          const hasPermission = await checkAndroidNotificationPermission();
+          if (hasPermission) {
+            setNotificationsEnabled(true);
+            // Mevcut bildirimleri kontrol et, yoksa yeniden ayarla
+            NotificationService.checkScheduledNotifications();
+            console.log('[Notifications] 🔔 Notifications restored');
+          } else {
+            // İzin kaldırılmış, durumu güncelle
+            setNotificationsEnabled(false);
+            await AsyncStorage.setItem('notificationsEnabled', 'false');
+            console.log('[Notifications] ⚠️ Permission revoked, disabled notifications');
+          }
         }
       } catch (error) {
         console.error('[Notifications] Load error:', error);
@@ -1497,11 +1615,15 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           <View style={[styles.modalContent, theme === 'light' && styles.modalContentLight]}>
             <View style={[styles.modalHeader, theme === 'light' && styles.modalHeaderLight]}>
               <Text style={[styles.modalTitle, theme === 'light' && styles.modalTitleLight]}>{getTranslation('support')}</Text>
-              <TouchableOpacity onPress={() => setShowSupportModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setShowSupportModal(false);
+                setSupportEmail('');
+                setSupportMessage('');
+              }}>
                 <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
               </TouchableOpacity>
             </View>
-            <View style={styles.modalBody}>
+            <ScrollView style={styles.modalBody}>
               <View style={styles.supportSection}>
                 <Ionicons name="mail" size={48} color="#7DD3C0" style={{ alignSelf: 'center', marginBottom: 16 }} />
                 <Text style={[styles.supportTitle, theme === 'light' && styles.supportTitleLight]}>
@@ -1511,37 +1633,215 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                    'Get in Touch'}
                 </Text>
                 <Text style={[styles.supportText, theme === 'light' && styles.supportTextLight]}>
-                  {selectedLanguage === 'tr' ? 'Sorularınız için bizimle iletişime geçin.' :
-                   selectedLanguage === 'ar' ? 'اتصل بنا إذا كان لديك أسئلة.' :
-                   selectedLanguage === 'ru' ? 'Свяжитесь с нами, если у вас есть вопросы.' :
-                   'Contact us if you have any questions.'}
+                  {selectedLanguage === 'tr' ? 'Sorularınız veya önerileriniz için bizimle iletişime geçin.' :
+                   selectedLanguage === 'ar' ? 'اتصل بنا إذا كان لديك أسئلة أو اقتراحات.' :
+                   selectedLanguage === 'ru' ? 'Свяжитесь с нами, если у вас есть вопросы или предложения.' :
+                   'Contact us with your questions or suggestions.'}
                 </Text>
               </View>
+
+              {/* Email Input */}
+              <View style={styles.supportInputContainer}>
+                <Text style={[styles.supportInputLabel, theme === 'light' && styles.supportInputLabelLight]}>
+                  {selectedLanguage === 'tr' ? 'E-posta Adresiniz' :
+                   selectedLanguage === 'ar' ? 'عنوان بريدك الإلكتروني' :
+                   selectedLanguage === 'ru' ? 'Ваш email' :
+                   'Your Email'}
+                </Text>
+                <TextInput
+                  style={[styles.supportInput, theme === 'light' && styles.supportInputLight]}
+                  placeholder={selectedLanguage === 'tr' ? 'ornek@email.com' :
+                              selectedLanguage === 'ar' ? 'example@email.com' :
+                              selectedLanguage === 'ru' ? 'пример@email.com' :
+                              'example@email.com'}
+                  placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                  value={supportEmail}
+                  onChangeText={setSupportEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+
+              {/* Message Input */}
+              <View style={styles.supportInputContainer}>
+                <Text style={[styles.supportInputLabel, theme === 'light' && styles.supportInputLabelLight]}>
+                  {selectedLanguage === 'tr' ? 'Mesajınız' :
+                   selectedLanguage === 'ar' ? 'رسالتك' :
+                   selectedLanguage === 'ru' ? 'Ваше сообщение' :
+                   'Your Message'}
+                </Text>
+                <TextInput
+                  style={[styles.supportTextArea, theme === 'light' && styles.supportInputLight]}
+                  placeholder={selectedLanguage === 'tr' ? 'Lütfen sorununuzu veya önerinizi açıklayın...' :
+                              selectedLanguage === 'ar' ? 'يرجى وصف مشكلتك أو اقتراحك...' :
+                              selectedLanguage === 'ru' ? 'Пожалуйста, опишите вашу проблему или предложение...' :
+                              'Please describe your issue or suggestion...'}
+                  placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
+                  value={supportMessage}
+                  onChangeText={setSupportMessage}
+                  multiline
+                  numberOfLines={6}
+                  textAlignVertical="top"
+                />
+              </View>
+
+              {/* Send Email Button */}
               <TouchableOpacity 
-                style={[styles.supportButton, theme === 'light' && styles.supportButtonLight]}
-                onPress={() => {
-                  Alert.alert('Email Support', 'support@kspeaker.com', [{ text: 'OK' }]);
+                style={[styles.supportButton, theme === 'light' && styles.supportButtonLight, 
+                       (!supportEmail || !supportMessage) && styles.supportButtonDisabled]}
+                onPress={async () => {
+                  if (!supportEmail || !supportMessage) {
+                    Alert.alert(
+                      selectedLanguage === 'tr' ? 'Eksik Bilgi' : 
+                      selectedLanguage === 'ar' ? 'معلومات ناقصة' :
+                      selectedLanguage === 'ru' ? 'Недостающая информация' :
+                      'Missing Information',
+                      selectedLanguage === 'tr' ? 'Lütfen e-posta adresinizi ve mesajınızı girin.' :
+                      selectedLanguage === 'ar' ? 'يرجى إدخال عنوان بريدك الإلكتروني ورسالتك.' :
+                      selectedLanguage === 'ru' ? 'Пожалуйста, введите ваш email и сообщение.' :
+                      'Please enter your email and message.',
+                      [{ text: 'OK' }]
+                    );
+                    return;
+                  }
+
+                  try {
+                    // Create mailto URL with proper encoding and better format
+                    const subject = encodeURIComponent('Kspeaker Support - Kullanıcı Talebi');
+                    const body = encodeURIComponent(
+                      `Merhaba Kspeaker Destek Ekibi,\n\n` +
+                      `===========================================\n` +
+                      `KULLANICI BİLGİLERİ:\n` +
+                      `===========================================\n` +
+                      `Gönderen Email: ${supportEmail}\n` +
+                      `Tarih: ${new Date().toLocaleString('tr-TR')}\n\n` +
+                      `===========================================\n` +
+                      `MESAJ:\n` +
+                      `===========================================\n` +
+                      `${supportMessage}\n\n` +
+                      `-------------------------------------------\n` +
+                      `Bu mesaj Kspeaker mobil uygulamasından gönderilmiştir.\n` +
+                      `Lütfen kullanıcıya ${supportEmail} adresinden yanıt verin.`
+                    );
+                    const mailtoUrl = `mailto:omer.yilmaz@kartezya.com?subject=${subject}&body=${body}`;
+                    
+                    // Check if URL can be opened
+                    const canOpen = await Linking.canOpenURL(mailtoUrl);
+                    
+                    if (canOpen) {
+                      await Linking.openURL(mailtoUrl);
+                      
+                      // Don't clear form immediately - wait for user confirmation
+                      Alert.alert(
+                        selectedLanguage === 'tr' ? '✉️ Gmail Açıldı!' :
+                        selectedLanguage === 'ar' ? '✉️ تم فتح Gmail!' :
+                        selectedLanguage === 'ru' ? '✉️ Gmail Открыт!' :
+                        '✉️ Gmail Opened!',
+                        selectedLanguage === 'tr' ? 
+                          '1️⃣ Gmail uygulamanızda MESAJI KONTROL EDİN\n\n' +
+                          '2️⃣ Mesaj doğruysa SAĞ ÜSTTEKİ GÖNDER (✈️) BUTONUNA BASIN\n\n' +
+                          '3️⃣ Mesaj gönderildiğinde bu formu kapatabilirsiniz\n\n' +
+                          '⚠️ ÖNEMLİ: Gönder butonuna basmadan geri gelirseniz mesajınız gönderilemez!' :
+                        selectedLanguage === 'ar' ? 
+                          '1️⃣ تحقق من الرسالة في تطبيق Gmail\n\n' +
+                          '2️⃣ إذا كانت الرسالة صحيحة، اضغط على زر الإرسال (✈️) في الأعلى\n\n' +
+                          '3️⃣ بعد إرسال الرسالة، يمكنك إغلاق هذا النموذج\n\n' +
+                          '⚠️ مهم: إذا عدت دون الضغط على إرسال، لن يتم إرسال رسالتك!' :
+                        selectedLanguage === 'ru' ? 
+                          '1️⃣ Проверьте сообщение в приложении Gmail\n\n' +
+                          '2️⃣ Если сообщение правильное, нажмите кнопку ОТПРАВИТЬ (✈️) вверху\n\n' +
+                          '3️⃣ После отправки сообщения можете закрыть эту форму\n\n' +
+                          '⚠️ ВАЖНО: Если вы вернетесь без нажатия отправить, ваше сообщение не будет отправлено!' :
+                          '1️⃣ CHECK the message in your Gmail app\n\n' +
+                          '2️⃣ If the message is correct, PRESS the SEND (✈️) button at the top right\n\n' +
+                          '3️⃣ After sending, you can close this form\n\n' +
+                          '⚠️ IMPORTANT: If you return without pressing send, your message will NOT be sent!',
+                        [
+                          { 
+                            text: selectedLanguage === 'tr' ? 'Gönderdim ✅' :
+                                  selectedLanguage === 'ar' ? 'أرسلت ✅' :
+                                  selectedLanguage === 'ru' ? 'Отправил ✅' :
+                                  'Sent ✅',
+                            onPress: () => {
+                              // Clear form after user confirms
+                              setSupportEmail('');
+                              setSupportMessage('');
+                              setShowSupportModal(false);
+                              Alert.alert(
+                                selectedLanguage === 'tr' ? '🎉 Teşekkürler!' :
+                                selectedLanguage === 'ar' ? '🎉 شكراً!' :
+                                selectedLanguage === 'ru' ? '🎉 Спасибо!' :
+                                '🎉 Thank You!',
+                                selectedLanguage === 'tr' ? '24-48 saat içinde size dönüş yapacağız.' :
+                                selectedLanguage === 'ar' ? 'سنرد عليك في غضون 24-48 ساعة.' :
+                                selectedLanguage === 'ru' ? 'Мы ответим вам в течение 24-48 часов.' :
+                                'We will respond within 24-48 hours.'
+                              );
+                            }
+                          },
+                          { 
+                            text: selectedLanguage === 'tr' ? 'Henüz Göndermedim' :
+                                  selectedLanguage === 'ar' ? 'لم أرسل بعد' :
+                                  selectedLanguage === 'ru' ? 'Еще не отправил' :
+                                  'Not Yet',
+                            style: 'cancel'
+                          }
+                        ]
+                      );
+                    } else {
+                      throw new Error('Cannot open email app');
+                    }
+                  } catch (error) {
+                    console.error('Error opening email:', error);
+                    // Copy email to clipboard as fallback
+                    Alert.alert(
+                      selectedLanguage === 'tr' ? 'E-posta Uygulaması Bulunamadı' :
+                      selectedLanguage === 'ar' ? 'لم يتم العثور على تطبيق البريد الإلكتروني' :
+                      selectedLanguage === 'ru' ? 'Почтовое приложение не найдено' :
+                      'Email App Not Found',
+                      selectedLanguage === 'tr' ? `Cihazınızda e-posta uygulaması yüklü değil.\n\nLütfen omer.yilmaz@kartezya.com adresine manuel olarak yazın:\n\nKonu: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}` :
+                      selectedLanguage === 'ar' ? `لا يوجد تطبيق بريد إلكتروني على جهازك.\n\nيرجى الكتابة يدويًا إلى omer.yilmaz@kartezya.com:\n\nالموضوع: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}` :
+                      selectedLanguage === 'ru' ? `На вашем устройстве нет почтового приложения.\n\nПожалуйста, напишите вручную на omer.yilmaz@kartezya.com:\n\nТема: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}` :
+                      `No email app found on your device.\n\nPlease write manually to omer.yilmaz@kartezya.com:\n\nSubject: Kspeaker Support Request\n\nFrom: ${supportEmail}\n\n${supportMessage}`,
+                      [
+                        { 
+                          text: 'OK',
+                          onPress: () => {
+                            // Keep form data for manual sending
+                          }
+                        }
+                      ]
+                    );
+                  }
                 }}
               >
-                <Ionicons name="mail-outline" size={24} color="#FFFFFF" />
-                <Text style={styles.supportButtonText}>support@kspeaker.com</Text>
-              </TouchableOpacity>
-              <View style={styles.supportDivider} />
-              <View style={styles.supportSection}>
-                <Text style={[styles.supportTitle, theme === 'light' && styles.supportTitleLight]}>
-                  {selectedLanguage === 'tr' ? 'Yanıt Süresi' :
-                   selectedLanguage === 'ar' ? 'وقت الاستجابة' :
-                   selectedLanguage === 'ru' ? 'Время ответа' :
-                   'Response Time'}
+                <Ionicons name="send" size={24} color="#FFFFFF" />
+                <Text style={styles.supportButtonText}>
+                  {selectedLanguage === 'tr' ? 'Mesaj Gönder' :
+                   selectedLanguage === 'ar' ? 'إرسال رسالة' :
+                   selectedLanguage === 'ru' ? 'Отправить сообщение' :
+                   'Send Message'}
                 </Text>
-                <Text style={[styles.supportText, theme === 'light' && styles.supportTextLight]}>
-                  {selectedLanguage === 'tr' ? 'Genellikle 24 saat içinde yanıt veririz.' :
-                   selectedLanguage === 'ar' ? 'نرد عادة في غضون 24 ساعة.' :
-                   selectedLanguage === 'ru' ? 'Обычно мы отвечаем в течение 24 часов.' :
-                   'We typically respond within 24 hours.'}
+              </TouchableOpacity>
+
+              <View style={styles.supportDivider} />
+              
+              <View style={styles.supportSection}>
+                <Text style={[styles.supportInfoText, theme === 'light' && styles.supportTextLight]}>
+                  {selectedLanguage === 'tr' ? '📧 E-posta: omer.yilmaz@kartezya.com' :
+                   selectedLanguage === 'ar' ? '📧 البريد الإلكتروني: omer.yilmaz@kartezya.com' :
+                   selectedLanguage === 'ru' ? '📧 Email: omer.yilmaz@kartezya.com' :
+                   '📧 Email: omer.yilmaz@kartezya.com'}
+                </Text>
+                <Text style={[styles.supportInfoText, theme === 'light' && styles.supportTextLight]}>
+                  {selectedLanguage === 'tr' ? '⏰ Yanıt süresi: 24-48 saat' :
+                   selectedLanguage === 'ar' ? '⏰ وقت الاستجابة: 24-48 ساعة' :
+                   selectedLanguage === 'ru' ? '⏰ Время ответа: 24-48 часов' :
+                   '⏰ Response time: 24-48 hours'}
                 </Text>
               </View>
-            </View>
+            </ScrollView>
           </View>
         </View>
       )}
@@ -1864,9 +2164,36 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         style={styles.composerKeyboard}
       >
         <View style={styles.composerContainer}>
-          {/* Dropup Menu */}
-          {showDropup && (
-            <View style={[styles.dropupMenu, theme === 'light' && styles.dropupMenuLight]}>
+          {/* Dropup Menu - Modal with backdrop */}
+          <Modal
+            visible={showDropup}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => setShowDropup(false)}
+          >
+            <Pressable 
+              style={styles.dropupBackdrop}
+              onPress={() => {
+                setShowDropup(false);
+                setShowModeSelector(false);
+              }}
+            >
+              <Pressable 
+                style={[styles.dropupMenuContainer]}
+                onPress={(e) => e.stopPropagation()}
+              >
+                <View style={[styles.dropupMenu, theme === 'light' && styles.dropupMenuLight]}>
+                  {/* Close Button - Top Left */}
+                  <TouchableOpacity 
+                    style={styles.dropupCloseButton}
+                    onPress={() => {
+                      setShowDropup(false);
+                      setShowModeSelector(false);
+                      triggerHaptic('light');
+                    }}
+                  >
+                    <Ionicons name="close" size={20} color="#EF4444" />
+                  </TouchableOpacity>
               {showModeSelector ? (
                 // Mode Selection List
                 <>
@@ -1996,8 +2323,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                   </TouchableOpacity>
                 </>
               )}
-            </View>
-          )}
+                </View>
+              </Pressable>
+            </Pressable>
+          </Modal>
           
           <View style={[styles.composerInner, { paddingBottom: Math.max(insets.bottom, 12) }]}>
             {Platform.OS === 'ios' ? (
@@ -2005,9 +2334,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 <View style={[styles.inputRow, theme === 'light' && styles.inputRowLight]}>
                   <TouchableOpacity
                     style={styles.plusButton}
-                    onPress={() => setShowDropup(!showDropup)}
+                    onPress={() => setShowDropup(true)}
                   >
-                    <Ionicons name="add-circle" size={28} color="#4A6FA5" />
+                    <Ionicons 
+                      name="add-circle" 
+                      size={28} 
+                      color="#4A6FA5" 
+                    />
                   </TouchableOpacity>
                   <TextInput
                     ref={inputRef}
@@ -2160,10 +2493,14 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                     style={styles.plusButton}
                     onPress={() => {
                       triggerHaptic('light');
-                      setShowDropup(!showDropup);
+                      setShowDropup(true);
                     }}
                   >
-                    <Ionicons name="add-circle" size={28} color="#4A6FA5" />
+                    <Ionicons 
+                      name="add-circle" 
+                      size={28} 
+                      color="#4A6FA5" 
+                    />
                   </TouchableOpacity>
                   <TextInput
                     ref={inputRef}
@@ -2852,14 +3189,29 @@ const styles = StyleSheet.create({
   plusButton: {
     marginRight: 8,
   },
-  dropupMenu: {
+  dropupBackdrop: {
     position: 'absolute',
-    bottom: '100%',
-    left: 20,
-    right: 20,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 120,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
+  },
+  dropupMenuContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 70,
+  },
+  dropupCloseButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 10,
+    padding: 4,
+  },
+  dropupMenu: {
     backgroundColor: '#1C1C1E',
     borderRadius: 16,
-    marginBottom: 8,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
     shadowColor: '#000',
@@ -3178,10 +3530,59 @@ const styles = StyleSheet.create({
   supportButtonLight: {
     backgroundColor: '#4A6FA5',
   },
+  supportButtonDisabled: {
+    backgroundColor: 'rgba(125, 211, 192, 0.5)',
+    opacity: 0.6,
+  },
   supportButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  supportInputContainer: {
+    marginBottom: 16,
+  },
+  supportInputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ECECEC',
+    marginBottom: 8,
+  },
+  supportInputLabelLight: {
+    color: '#1A1A1F',
+  },
+  supportInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#ECECEC',
+  },
+  supportInputLight: {
+    backgroundColor: 'rgba(0, 0, 0, 0.03)',
+    borderColor: 'rgba(0, 0, 0, 0.1)',
+    color: '#1A1A1F',
+  },
+  supportTextArea: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#ECECEC',
+    minHeight: 120,
+  },
+  supportInfoText: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.7)',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginVertical: 4,
   },
   supportDivider: {
     height: 1,

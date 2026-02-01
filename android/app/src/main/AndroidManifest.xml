@@ -17,10 +17,17 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     
-    <!-- Speech Recognition - Android 11+ için query declaration -->
+    <!-- Android 11+ için query declarations -->
     <queries>
+        <!-- Speech Recognition -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        
+        <!-- Email/Mailto Support - Gmail, Outlook vb. email uygulamaları için -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
         </intent>
     </queries>
 
