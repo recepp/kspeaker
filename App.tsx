@@ -12,6 +12,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import ChatScreen from './ChatScreen';
 import LevelSelectionScreen from './LevelSelectionScreen';
 import FlashcardScreen from './FlashcardScreen';
+import AccountDeletionScreen from './AccountDeletionScreen';
 import {
   SafeAreaProvider,
 } from 'react-native-safe-area-context';
@@ -34,6 +35,7 @@ function App() {
           <Stack.Screen name="Chat" component={ChatScreen} />
           <Stack.Screen name="LevelSelection" component={LevelSelectionScreen} />
           <Stack.Screen name="Flashcard" component={FlashcardScreen} />
+          <Stack.Screen name="AccountDeletion" component={AccountDeletionScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>

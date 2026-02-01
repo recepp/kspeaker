@@ -24,6 +24,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>mailto</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -31,14 +35,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>This app needs access to your microphone for speech recognition.</string>
+	<string>Kspeaker needs access to your microphone for voice conversation and speech recognition to help you practice English speaking.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>This app needs access to speech recognition for converting your voice to text.</string>
+	<string>Kspeaker uses speech recognition to convert your spoken English into text for AI-powered conversation practice.</string>
 	<key>NSUserNotificationsUsageDescription</key>
-	<string>We would like to send you daily reminders to practice English.</string>
+	<string>Kspeaker would like to send you daily reminders to help you maintain a consistent English practice routine.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIAppFonts</key>

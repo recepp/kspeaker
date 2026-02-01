@@ -38,7 +38,8 @@ const getHeaders = (conversationMode?: string) => {
     'X-Platform': apiState.platform,
     'X-Platform-Version': apiState.systemVersion,
     'X-App-Version': `${apiState.appVersion}+${apiState.buildNumber}`,
-    'X-Api-Key': `kspeaker_secure_api_key_1`,
+    // API key should come from environment variables for security
+    'X-Api-Key': config.API_KEY || `kspeaker_secure_api_key_1`,
   };
   
   if (apiState.deviceId) {
@@ -52,31 +53,106 @@ const getHeaders = (conversationMode?: string) => {
   return headers;
 };
 
-// Register a new user
-export async function registerUser(email: string): Promise<boolean> {
+// Register a new user with voucher (or without voucher for free tier)
+export async function registerUser(voucherCode?: string): Promise<boolean> {
   try {
     if (!apiState.deviceId) {
       await initializeApi();
     }
 
+    const body: any = {};
+    
+    // Add voucher only if provided
+    if (voucherCode) {
+      body.voucher = voucherCode;
+    }
+
+    console.log('[API] Registering device with voucher:', voucherCode);
+    console.log('[API] Request body:', JSON.stringify(body));
+    console.log('[API] Device ID:', apiState.deviceId);
+    console.log('[API] API URL:', `${config.API_BASE_URL}/register`);
+
     const response = await fetch(`${config.API_BASE_URL}/register`, {
       method: 'POST',
       headers: getHeaders(),
+      body: JSON.stringify(body),
+    });
+
+    console.log('[API] Registration response status:', response.status);
+    
+    // Try to get response body for debugging
+    const responseText = await response.text();
+    console.log('[API] Registration response body:', responseText);
+
+    if (response.ok) {
+      apiState.isRegistered = true;
+      logInfo(`[API] Device registered successfully${voucherCode ? ' with voucher' : ' (free tier)'}`);
+      return true;
+    }
+    
+    // If 409 (already registered), that's also success
+    if (response.status === 409) {
+      apiState.isRegistered = true;
+      logInfo(`[API] Device already registered`);
+      return true;
+    }
+    
+    logWarning(`[API] Registration failed: ${response.status} - ${responseText}`);
+    return false;
+  } catch (error) {
+    console.error('[API] Registration error:', error);
+    logError(error as Error, 'API registerUser');
+    return false;
+  }
+}
+
+// Admin function to create a new voucher
+export async function createVoucher(expiresAt: string): Promise<string | null> {
+  try {
+    // SECURITY WARNING: Admin key should NEVER be in client code
+    // This function should only be used in development/testing
+    // In production, vouchers should be created via secure backend admin panel
+    if (!__DEV__) {
+      console.error('[API] ⚠️ Admin functions should not be called in production!');
+      return null;
+    }
+    
+    const response = await fetch(`${config.API_BASE_URL}/vouchers`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.ADMIN_API_KEY || 'kspeaker_secure_api_key_admin',
+      },
       body: JSON.stringify({
+        expiresAt
       }),
     });
 
     if (response.ok) {
-      apiState.email = email;
-      apiState.isRegistered = true;
-      logInfo(`[API] User registered successfully: ${email}`);
-      return true;
+      const data = await response.json();
+      console.log('[API] 🎟️ Voucher response:', JSON.stringify(data, null, 2));
+      
+      // Try multiple possible field names from backend
+      const voucherCode = data.voucher || data.voucherCode || data.code || data.id;
+      
+      if (voucherCode) {
+        console.log('[API] ✅ Extracted voucher code:', voucherCode);
+        logInfo(`[API] Voucher created successfully: ${voucherCode}`);
+        return voucherCode;
+      } else {
+        console.error('[API] ❌ Could not find voucher code in response:', data);
+        return null;
+      }
     }
-    logWarning(`[API] Registration failed: ${response.status}`);
-    return false;
+    
+    const errorText = await response.text();
+    console.error('[API] ❌ Voucher creation failed:', response.status, errorText);
+    logWarning(`[API] Voucher creation failed: ${response.status} - ${errorText}`);
+    return null;
   } catch (error) {
-    logError(error as Error, 'API registerUser');
-    return false;
+    console.error('[API] ❌ Voucher creation error:', error);
+    logError(error as Error, 'API createVoucher');
+    return null;
   }
 }
 
@@ -104,24 +180,9 @@ export async function sendChatMessage(text: string, conversationMode?: string): 
       
       if (__DEV__) console.log('[API] Response status:', response.status);
       
-      // Check for service unavailable (503)
-      if (response.status === 503) {
-        throw new Error('SERVICE_UNAVAILABLE');
-      }
-      
       // Check for rate limit error (429)
       if (response.status === 429) {
         throw new Error('RATE_LIMIT_EXCEEDED');
-      }
-      
-      // Check for server errors (500-599)
-      if (response.status >= 500 && response.status < 600) {
-        throw new Error('SERVER_ERROR');
-      }
-      
-      // Check for bad request (400-499)
-      if (!response.ok && response.status >= 400 && response.status < 500) {
-        throw new Error(`HTTP_ERROR_${response.status}`);
       }
       
       // Try to parse JSON response
@@ -157,56 +218,6 @@ export async function sendChatMessage(text: string, conversationMode?: string): 
   }, 2, 1500); // Max 2 retries with 1.5s base delay
 }
 
-// Generate speech using ElevenLabs free public TTS
-export async function generateSpeechElevenLabs(text: string): Promise<string | null> {
-  try {
-    // Using ElevenLabs free public voices
-    // Rachel voice (natural, clear, female)
-    const voiceId = 'Rachel'; // Other free voices: Adam, Antoni, Bella, Domi, Elli, Josh
-    
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        text: text,
-        model_id: 'eleven_monolingual_v1', // Free model
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75
-        }
-      }),
-    });
-
-    if (!response.ok) {
-      console.error('[ElevenLabs TTS] Error:', response.status);
-      return null;
-    }
-
-    // Response is audio blob
-    const audioBlob = await response.blob();
-    const base64Audio = await blobToBase64(audioBlob);
-    return base64Audio;
-  } catch (error) {
-    console.error('[ElevenLabs TTS] Error:', error);
-    return null;
-  }
-}
-
-// Helper function to convert blob to base64
-const blobToBase64 = (blob: Blob): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64 = (reader.result as string).split(',')[1];
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-};
-
 // Generate speech using OpenAI TTS (same voice as ChatGPT)
 export async function generateSpeech(text: string, voice: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' = 'nova'): Promise<string | null> {
   try {
@@ -236,5 +247,52 @@ export async function generateSpeech(text: string, voice: 'alloy' | 'echo' | 'fa
   } catch (error) {
     console.error('[TTS API] Error generating speech:', error);
     return null;
+  }
+}
+
+/**
+ * Send support message to omer.yilmaz@kartezya.com
+ * Email will be sent with Kspeaker branded HTML template
+ */
+export async function sendSupportMessage(email: string, description: string): Promise<boolean> {
+  try {
+    if (!apiState.deviceId) {
+      await initializeApi();
+    }
+
+    console.log('[API] Sending support message...');
+    console.log('[API] From:', email);
+    console.log('[API] Description:', description.substring(0, 50) + '...');
+
+    const response = await fetch(`${config.API_BASE_URL}/support`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ 
+        email,
+        description,
+        deviceInfo: {
+          deviceId: apiState.deviceId,
+          platform: apiState.platform,
+          systemVersion: apiState.systemVersion,
+          appVersion: apiState.appVersion,
+          buildNumber: apiState.buildNumber,
+        }
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[API] Support message failed:', response.status, errorText);
+      logWarning(`[API] Support message failed: ${response.status} - ${errorText}`);
+      return false;
+    }
+
+    console.log('[API] ✅ Support message sent successfully');
+    logInfo('[API] Support message sent successfully');
+    return true;
+  } catch (error) {
+    console.error('[API] Support message error:', error);
+    logError(error as Error, 'API sendSupportMessage');
+    return false;
   }
 }

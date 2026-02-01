@@ -17,24 +17,39 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 
-interface EmailModalProps {
+interface VoucherModalProps {
   visible: boolean;
-  onSubmit: (email: string) => Promise<boolean>;
-  onSkip?: () => void; // Yeni: Skip butonu için
+  onSubmit: (voucherCode: string) => Promise<boolean>;
+  onClose: () => void;
 }
 
-export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onSubmit, onSkip }) => {
-  const [email, setEmail] = useState('');
+export const VoucherModal: React.FC<VoucherModalProps> = ({ visible, onSubmit, onClose }) => {
+  const [voucherCode, setVoucherCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
 
+  const formatVoucherCode = (text: string) => {
+    // Remove all non-alphanumeric characters and keep only A-Z0-9
+    const cleaned = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    
+    // Allow up to 32 characters (backend voucher code length)
+    return cleaned.slice(0, 32);
+  };
+
   const handleSubmit = async () => {
-    // Basic email validation
-    if (!email.includes('@') || !email.includes('.')) {
-      setError('Please enter a valid email address');
+    const cleanCode = voucherCode.replace(/[^A-Z0-9]/g, '');
+    
+    // Backend voucher codes are 32 characters
+    if (cleanCode.length < 16) {
+      setError('Voucher code is too short');
+      return;
+    }
+
+    if (cleanCode.length > 32) {
+      setError('Voucher code is too long');
       return;
     }
 
@@ -42,9 +57,13 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
     setError('');
 
     try {
-      const success = await onSubmit(email);
-      if (!success) {
-        setError('Registration failed. Please try again.');
+      // Call backend API to register with voucher
+      const success = await onSubmit(cleanCode);
+      if (success) {
+        setVoucherCode('');
+        onClose();
+      } else {
+        setError('Invalid voucher code. Please check and try again.');
       }
     } catch (err) {
       setError('An error occurred. Please try again.');
@@ -58,6 +77,7 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
       visible={visible}
       transparent
       animationType="fade"
+      onRequestClose={onClose}
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -74,8 +94,14 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                 styles.modalContent,
                 isDark ? styles.modalContentDark : styles.modalContentLight
               ]}>
-                {/* Close/Dismiss area visual indicator */}
-                <View style={styles.dragIndicator} />
+                {/* Close Button */}
+                <TouchableOpacity 
+                  onPress={onClose}
+                  style={styles.closeButton}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="close" size={28} color={isDark ? '#FFFFFF' : '#1F1F1F'} />
+                </TouchableOpacity>
 
                 {/* Logo/Icon Section */}
                 <View style={[
@@ -87,7 +113,7 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                     style={styles.iconGradient}
                   >
                     <Ionicons 
-                      name="mail-outline" 
+                      name="ticket-outline" 
                       size={38} 
                       color="#FFFFFF" 
                     />
@@ -99,16 +125,16 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                   styles.title,
                   isDark ? styles.titleDark : styles.titleLight
                 ]}>
-                  Welcome to KSpeaker! 👋
+                  Add Voucher Code 🎟️
                 </Text>
                 <Text style={[
                   styles.subtitle,
                   isDark ? styles.subtitleDark : styles.subtitleLight
                 ]}>
-                  Let's start your English learning journey
+                  Enter your voucher code to unlock unlimited messages
                 </Text>
                 
-                {/* Email Input with Send Button */}
+                {/* Voucher Code Input */}
                 <View style={[
                   styles.inputContainer,
                   isDark ? styles.inputContainerDark : styles.inputContainerLight,
@@ -116,7 +142,7 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                   error && styles.inputContainerError
                 ]}>
                   <Ionicons 
-                    name="mail" 
+                    name="ticket" 
                     size={20} 
                     color={isFocused ? (isDark ? '#7DD3C0' : '#4A6FA5') : (isDark ? '#888' : '#999')}
                     style={styles.inputIcon} 
@@ -126,27 +152,27 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                       styles.input,
                       isDark ? styles.inputDark : styles.inputLight
                     ]}
-                    placeholder="your.email@example.com"
+                    placeholder="Enter your voucher code"
                     placeholderTextColor={isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
-                    value={email}
+                    value={voucherCode}
                     onChangeText={(text) => {
-                      setEmail(text);
+                      setVoucherCode(formatVoucherCode(text));
                       setError('');
                     }}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
+                    autoCapitalize="characters"
                     autoCorrect={false}
                     editable={!isLoading}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => setIsFocused(false)}
-                    returnKeyType="send"
+                    returnKeyType="done"
                     onSubmitEditing={handleSubmit}
+                    maxLength={32} // Max 32 characters
                   />
                   
-                  {/* Send Button */}
+                  {/* Submit Button */}
                   <TouchableOpacity 
                     onPress={handleSubmit}
-                    disabled={isLoading || !email}
+                    disabled={isLoading || voucherCode.replace(/[^A-Z0-9]/g, '').length < 16}
                     style={styles.sendButton}
                     activeOpacity={0.7}
                   >
@@ -161,7 +187,7 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                         style={styles.sendButtonGradient}
                       >
                         <Ionicons 
-                          name="send" 
+                          name="checkmark" 
                           size={20} 
                           color="#FFFFFF" 
                         />
@@ -183,7 +209,7 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                 {/* Info Text */}
                 <View style={styles.infoContainer}>
                   <Ionicons 
-                    name="shield-checkmark-outline" 
+                    name="information-circle-outline" 
                     size={13} 
                     color={isDark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(0, 0, 0, 0.45)'} 
                   />
@@ -191,25 +217,9 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
                     styles.infoText,
                     isDark ? styles.infoTextDark : styles.infoTextLight
                   ]}>
-                    Your email is safe and will never be shared
+                    Get a voucher code from support@kspeaker.com
                   </Text>
                 </View>
-
-                {/* YENI: Skip Button */}
-                {onSkip && (
-                  <TouchableOpacity 
-                    onPress={onSkip}
-                    style={styles.skipButton}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[
-                      styles.skipButtonText,
-                      isDark ? styles.skipButtonTextDark : styles.skipButtonTextLight
-                    ]}>
-                      Continue Without Email
-                    </Text>
-                  </TouchableOpacity>
-                )}
               </View>
             </ScrollView>
           </View>
@@ -219,6 +229,8 @@ export const EmailRegistrationModal: React.FC<EmailModalProps> = ({ visible, onS
   );
 };
 
+// ...existing styles...
+
 const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
@@ -226,24 +238,24 @@ const styles = StyleSheet.create({
   },
   modalContainerInner: {
     flex: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
   },
   scrollContent: {
     flexGrow: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
   },
   modalContent: {
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    paddingTop: 8,
-    paddingBottom: 60,
+    borderRadius: 24,
+    paddingTop: 24,
+    paddingBottom: 32,
     paddingHorizontal: 24,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 16,
     elevation: 12,
-    minHeight: 400,
+    position: 'relative',
   },
   modalContentDark: {
     backgroundColor: '#1F1F1F',
@@ -251,13 +263,11 @@ const styles = StyleSheet.create({
   modalContentLight: {
     backgroundColor: '#FFFFFF',
   },
-  dragIndicator: {
-    width: 40,
-    height: 4,
-    backgroundColor: 'rgba(128, 128, 128, 0.3)',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 24,
+  closeButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 10,
   },
   iconCircle: {
     width: 80,
@@ -346,7 +356,8 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
+    letterSpacing: 1,
   },
   inputDark: {
     color: '#FFFFFF',
@@ -408,21 +419,5 @@ const styles = StyleSheet.create({
   },
   infoTextLight: {
     color: 'rgba(0, 0, 0, 0.5)',
-  },
-  skipButton: {
-    marginTop: 16,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  skipButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    textDecorationLine: 'underline',
-  },
-  skipButtonTextDark: {
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-  skipButtonTextLight: {
-    color: 'rgba(0, 0, 0, 0.6)',
   },
 });
