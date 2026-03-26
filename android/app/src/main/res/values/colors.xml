@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notification icon tint color -->
+    <color name="notification_color">#4A90E2</color>
+    
+    <!-- App theme colors -->
+    <color name="primary">#4A90E2</color>
+    <color name="primary_dark">#2C5AA0</color>
+    <color name="accent">#7DD3C0</color>
+    
+    <!-- Background colors -->
+    <color name="background_dark">#1A1A1F</color>
+    <color name="background_light">#FFFFFF</color>
+    
+    <!-- Launcher icon colors -->
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>

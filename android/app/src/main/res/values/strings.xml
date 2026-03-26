@@ -1,3 +1,13 @@
 <resources>
     <string name="app_name">kspeaker</string>
+    
+    <!-- Permission Rationale Strings (iOS Info.plist eşdeğerleri) -->
+    <string name="microphone_permission_rationale">This app needs access to your microphone for speech recognition.</string>
+    <string name="speech_recognition_permission_rationale">This app needs access to speech recognition for converting your voice to text.</string>
+    <string name="notification_permission_rationale">We would like to send you daily reminders to practice English.</string>
+    
+    <!-- Notification Channel Info -->
+    <string name="notification_channel_name">Daily Reminders</string>
+    <string name="notification_channel_description">Daily practice reminders to help you improve your English</string>
 </resources>
+

@@ -1,6 +1,8 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+// Firebase Google Services plugin (iOS'ta otomatik, Android'de manuel)
+apply plugin: "com.google.gms.google-services"
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -56,8 +58,21 @@ react {
 
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
+ * iOS'ta otomatik optimization (Xcode Build Settings)
  */
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = true
+
+/**
+ * Enable R8 full mode for better optimization
+ * iOS'taki LLVM optimization benzeri
+ */
+def enableR8FullMode = true
+
+/**
+ * Enable code shrinking and resource shrinking
+ * iOS'taki Dead Code Stripping ve Unused Resource Removal
+ */
+def enableShrinkResources = true
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -84,6 +99,17 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        
+        // Multi-Dex support (iOS'ta otomatik)
+        multiDexEnabled true
+        
+        // Vector drawables support
+        vectorDrawables.useSupportLibrary = true
+        
+        // NDK ABI filters - iOS'taki architectures gibi
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
     }
     signingConfigs {
         debug {
@@ -92,18 +118,82 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // Production release signing (iOS'taki Distribution Certificate benzeri)
+        // PRODUCTION İÇİN: keystore oluştur ve bu config'i aktifleştir
+        // release {
+        //     storeFile file('release.keystore')
+        //     storePassword System.getenv("KEYSTORE_PASSWORD") ?: "your-password"
+        //     keyAlias System.getenv("KEY_ALIAS") ?: "your-key-alias"
+        //     keyPassword System.getenv("KEY_PASSWORD") ?: "your-key-password"
+        // }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            // Debug optimizasyonları kapalı (iOS Debug Config benzeri)
+            minifyEnabled false
+            shrinkResources false
+            debuggable true
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // Production signing (şimdilik debug kullanıyor, yukarıdaki release config'i aktifleştir)
             signingConfig signingConfigs.debug
+            
+            // iOS Release Build optimization eşdeğerleri
             minifyEnabled enableProguardInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            shrinkResources enableShrinkResources
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            
+            // R8 full mode (iOS LLVM optimization)
+            if (enableR8FullMode) {
+                proguardFiles getDefaultProguardFile("proguard-android-optimize.txt")
+            }
+            
+            // Debuggable kapalı (production)
+            debuggable false
+            
+            // Zipalign (APK optimizasyonu, iOS'ta otomatik)
+            zipAlignEnabled true
+            
+            // Crash raporlama için semboller (iOS dSYM benzeri)
+            ndk {
+                debugSymbolLevel 'FULL'
+            }
         }
+    }
+    
+    // Build output - iOS'taki Derived Data benzeri
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            def versionName = variant.versionName
+            def versionCode = variant.versionCode
+            def buildType = variant.buildType.name
+            def date = new Date().format('yyyyMMdd')
+            
+            // APK adlandırma: kspeaker-release-1.0-20260201.apk
+            outputFileName = "kspeaker-${buildType}-${versionName}-${date}.apk"
+        }
+    }
+    
+    // Compile options - iOS Swift/Obj-C compiler settings benzeri
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    
+    // Packaging options
+    packagingOptions {
+        // Duplicate dosyaları engelle
+        pickFirst 'lib/x86/libc++_shared.so'
+        pickFirst 'lib/x86_64/libc++_shared.so'
+        pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+        pickFirst 'lib/arm64-v8a/libc++_shared.so'
     }
 }
 
@@ -116,4 +206,9 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+    
+    // Firebase BOM - iOS'taki Firebase/Core eşdeğeri
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
+    implementation 'com.google.firebase:firebase-analytics'
+    implementation 'com.google.firebase:firebase-messaging'
 }
