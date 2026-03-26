@@ -136,7 +136,7 @@ class TTSService implements ITTSService {
 
   /**
    * Select optimal voice based on quality metrics
-   * Strategy Pattern for voice selection
+   * Strategy Pattern for voice selection — platform-aware
    */
   private selectOptimalVoice(voices: any[]): any | null {
     if (!voices || voices.length === 0) {
@@ -144,58 +144,123 @@ class TTSService implements ITTSService {
       return null;
     }
 
-    console.log(`[TTS Service] 📢 Available voices: ${voices.length}`);
-    
-    // Filter for English US voices
-    const enVoices = voices.filter((v: any) => 
+    console.log(`[TTS Service] 📢 Available voices: ${voices.length}, platform: ${Platform.OS}`);
+
+    // Filter for English voices
+    const enVoices = voices.filter((v: any) =>
       v.language === 'en-US' || v.language?.startsWith('en-')
     );
-    
+
     if (enVoices.length === 0) {
       console.warn('[TTS Service] ⚠️ No English voices found, using first available');
       return voices[0];
     }
 
-    // Strategy 1: Premium/Enhanced quality voices
-    const premiumVoices = enVoices.filter((v: any) => 
-      v.quality === 'Premium' || 
+    if (Platform.OS === 'android') {
+      return this.selectAndroidVoice(enVoices, voices);
+    }
+
+    return this.selectIOSVoice(enVoices, voices);
+  }
+
+  /**
+   * iOS voice selection — prefers Apple Neural voices by name
+   */
+  private selectIOSVoice(enVoices: any[], allVoices: any[]): any | null {
+    const premiumVoices = enVoices.filter((v: any) =>
+      v.quality === 'Premium' ||
       v.quality === 'Enhanced' ||
       v.quality >= 300 ||
       v.id?.toLowerCase().includes('premium') ||
       v.id?.toLowerCase().includes('enhanced') ||
       v.name?.toLowerCase().includes('enhanced')
     );
-    
-    console.log(`[TTS Service] 📢 Premium voices found: ${premiumVoices.length}`);
-    
-    // Preferred voices in priority order (most natural first)
-    const preferredNames = [
-      'Samantha', 'Ava', 'Allison', 'Zoe', 'Nicky', 'Susan', 'Karen'
-    ];
-    
-    // Find preferred premium voice
+
+    console.log(`[TTS Service] iOS premium voices: ${premiumVoices.length}`);
+
+    const preferredNames = ['Samantha', 'Ava', 'Allison', 'Zoe', 'Nicky', 'Susan', 'Karen'];
+
     for (const name of preferredNames) {
-      const voice = premiumVoices.find((v: any) => 
+      const voice = premiumVoices.find((v: any) =>
         v.name?.toLowerCase().includes(name.toLowerCase())
       );
       if (voice) {
-        console.log(`[TTS Service] 🎯 Found preferred voice: ${voice.name}`);
+        console.log(`[TTS Service] 🎯 iOS selected: ${voice.name} (${voice.quality})`);
         return voice;
       }
     }
-    
-    // Fallback strategies
+
     if (premiumVoices.length > 0) {
-      console.log(`[TTS Service] 🎯 Using first premium voice: ${premiumVoices[0].name}`);
+      console.log(`[TTS Service] 🎯 iOS fallback premium: ${premiumVoices[0].name}`);
       return premiumVoices[0];
     }
-    
+
     if (enVoices.length > 0) {
-      console.log(`[TTS Service] 🎯 Using first English voice: ${enVoices[0].name}`);
+      console.log(`[TTS Service] 🎯 iOS fallback English: ${enVoices[0].name}`);
       return enVoices[0];
     }
-    
-    return voices[0];
+
+    return allVoices[0];
+  }
+
+  /**
+   * Android voice selection — Google TTS voices use numeric quality (100=normal, 300=high, 400=network)
+   * WaveNet / Neural voices have higher quality values and network=true
+   * Priority: WaveNet/Neural (quality 400) > high quality local (300) > any en-US
+   */
+  private selectAndroidVoice(enVoices: any[], allVoices: any[]): any | null {
+    // Android quality values: 100 = default, 200 = normal, 300 = high, 400+ = WaveNet/Neural
+    const networkVoices = enVoices.filter((v: any) =>
+      v.networkConnectionRequired === true ||
+      v.quality >= 400 ||
+      v.id?.toLowerCase().includes('wavenet') ||
+      v.id?.toLowerCase().includes('neural') ||
+      v.name?.toLowerCase().includes('wavenet') ||
+      v.name?.toLowerCase().includes('neural')
+    );
+
+    console.log(`[TTS Service] Android WaveNet/Network voices: ${networkVoices.length}`);
+
+    // Among network voices, prefer female en-US
+    const femaleNetwork = networkVoices.find((v: any) =>
+      v.language === 'en-US' &&
+      (v.gender === 'female' ||
+       v.id?.toLowerCase().includes('female') ||
+       v.id?.toLowerCase().includes('-f-') ||
+       v.name?.toLowerCase().includes('female'))
+    );
+
+    if (femaleNetwork) {
+      console.log(`[TTS Service] 🎯 Android selected WaveNet female: ${femaleNetwork.id || femaleNetwork.name}`);
+      return femaleNetwork;
+    }
+
+    if (networkVoices.length > 0) {
+      const enUS = networkVoices.find((v: any) => v.language === 'en-US') || networkVoices[0];
+      console.log(`[TTS Service] 🎯 Android selected WaveNet: ${enUS.id || enUS.name}`);
+      return enUS;
+    }
+
+    // High quality local voices (quality 300+)
+    const highQuality = enVoices.filter((v: any) =>
+      typeof v.quality === 'number' ? v.quality >= 300 : false
+    );
+
+    if (highQuality.length > 0) {
+      const enUS = highQuality.find((v: any) => v.language === 'en-US') || highQuality[0];
+      console.log(`[TTS Service] 🎯 Android selected high-quality: ${enUS.id || enUS.name}`);
+      return enUS;
+    }
+
+    // Any en-US voice
+    const enUS = enVoices.find((v: any) => v.language === 'en-US');
+    if (enUS) {
+      console.log(`[TTS Service] 🎯 Android fallback en-US: ${enUS.id || enUS.name}`);
+      return enUS;
+    }
+
+    console.log(`[TTS Service] 🎯 Android final fallback: ${enVoices[0]?.id || enVoices[0]?.name}`);
+    return enVoices[0] || allVoices[0];
   }
 
   /**

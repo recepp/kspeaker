@@ -7,11 +7,10 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  useColorScheme,
+
   Keyboard,
   TouchableWithoutFeedback,
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -21,15 +20,16 @@ interface VoucherModalProps {
   visible: boolean;
   onSubmit: (voucherCode: string) => Promise<boolean>;
   onClose: () => void;
+  theme?: 'dark' | 'light';
 }
 
-export const VoucherModal: React.FC<VoucherModalProps> = ({ visible, onSubmit, onClose }) => {
+export const VoucherModal: React.FC<VoucherModalProps> = ({ visible, onSubmit, onClose, theme = 'dark' }) => {
   const [voucherCode, setVoucherCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [isFocused, setIsFocused] = useState(false);
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+
+  const isDark = theme === 'dark';
 
   const formatVoucherCode = (text: string) => {
     // Remove all non-alphanumeric characters and keep only A-Z0-9
@@ -80,7 +80,7 @@ export const VoucherModal: React.FC<VoucherModalProps> = ({ visible, onSubmit, o
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
         style={styles.modalContainer}
       >
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>

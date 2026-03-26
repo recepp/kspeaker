@@ -1,6 +1,6 @@
 import PushNotification from 'react-native-push-notification';
 import PushNotificationIOS from '@react-native-community/push-notification-ios';
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 
 // Çok dilli bildirim metinleri
 const NOTIFICATION_TRANSLATIONS: {
@@ -120,7 +120,10 @@ class NotificationService {
       },
       onNotification: (notification: any) => {
         console.log('📬 Notification received:', notification);
-        notification.finish(PushNotificationIOS.FetchResult.NoData);
+        // Only call finish on iOS — it does not exist on Android
+        if (Platform.OS === 'ios') {
+          notification.finish(PushNotificationIOS.FetchResult.NoData);
+        }
       },
       permissions: {
         alert: true,
@@ -128,7 +131,8 @@ class NotificationService {
         sound: true,
       },
       popInitialNotification: true,
-      requestPermissions: true,
+      // Do NOT auto-request on Android — we handle it explicitly with requestPermissions()
+      requestPermissions: Platform.OS === 'ios',
     });
 
     // Create notification channel for Android
@@ -160,9 +164,27 @@ class NotificationService {
         console.log('📱 iOS Permission status:', authStatus);
         return authStatus.alert || authStatus.badge || authStatus.sound;
       } else {
-        const permissions = await PushNotification.requestPermissions();
-        console.log('📱 Android Permission status:', permissions);
-        return permissions;
+        // Android 13+ (API 33+) requires POST_NOTIFICATIONS runtime permission
+        if (typeof PermissionsAndroid !== 'undefined') {
+          const androidVersion = parseInt(String(Platform.Version), 10);
+          if (androidVersion >= 33) {
+            const granted = await PermissionsAndroid.request(
+              'android.permission.POST_NOTIFICATIONS' as any,
+              {
+                title: 'Notification Permission',
+                message: 'Kspeaker needs permission to send you daily practice reminders.',
+                buttonNeutral: 'Ask Me Later',
+                buttonNegative: 'Cancel',
+                buttonPositive: 'Allow',
+              }
+            );
+            const allowed = granted === PermissionsAndroid.RESULTS.GRANTED;
+            console.log('📱 Android 13+ POST_NOTIFICATIONS permission:', allowed);
+            return allowed;
+          }
+        }
+        // Android < 13: notifications are allowed by default
+        return true;
       }
     } catch (error) {
       console.error('❌ Permission error:', error);
@@ -179,9 +201,8 @@ class NotificationService {
       scheduledDate: scheduledDate.toISOString(),
       platform: Platform.OS,
     });
-    
+
     if (Platform.OS === 'ios') {
-      // iOS için - fireDate ile schedule et
       const notificationId = Math.random().toString();
       PushNotificationIOS.addNotificationRequest({
         id: notificationId,
@@ -194,9 +215,10 @@ class NotificationService {
       });
       console.log('✅ iOS notification scheduled for:', scheduledDate.toLocaleString());
     } else {
-      // Android için schedule
+      // Android: id must be a number
       PushNotification.localNotificationSchedule({
         channelId: 'kspeaker-reminders',
+        id: Math.floor(Math.random() * 10000), // numeric id required on Android
         title,
         message,
         date: scheduledDate,
@@ -212,7 +234,6 @@ class NotificationService {
 
   // Günlük tekrarlayan bildirimler ayarla
   scheduleDailyReminders = (language: 'en' | 'tr' | 'ar' | 'ru' = 'en') => {
-    // Önce tüm mevcut bildirimleri temizle
     this.cancelAllNotifications();
 
     const reminders = NOTIFICATION_TRANSLATIONS[language].reminders;
@@ -228,13 +249,11 @@ class NotificationService {
       const scheduledDate = new Date();
       scheduledDate.setHours(times[index].hour, times[index].minute, 0, 0);
 
-      // Eğer bugünün saati geçtiyse, yarın için ayarla
       if (scheduledDate <= now) {
         scheduledDate.setDate(scheduledDate.getDate() + 1);
       }
 
       if (Platform.OS === 'ios') {
-        // iOS için repeating notification
         PushNotificationIOS.addNotificationRequest({
           id: `daily-${index}`,
           title: reminder.title,
@@ -242,21 +261,21 @@ class NotificationService {
           sound: 'default',
           badge: 1,
           fireDate: scheduledDate,
-          repeats: true, // iOS için günlük tekrar
+          repeats: true,
           repeatsComponent: {
             hour: true,
             minute: true,
           },
-          userInfo: { 
+          userInfo: {
             id: `daily-${index}`,
-            type: 'daily-reminder'
+            type: 'daily-reminder',
           },
         });
         console.log(`📅 iOS daily reminder ${index}: ${reminder.title} at ${times[index].hour}:${String(times[index].minute).padStart(2, '0')}`);
       } else {
-        // Android için repeating notification
+        // Android: id MUST be a number — use index + fixed offset to avoid collisions
         PushNotification.localNotificationSchedule({
-          id: `daily-${index}`,
+          id: 100 + index, // numeric: 100, 101, 102, 103
           channelId: 'kspeaker-reminders',
           title: reminder.title,
           message: reminder.message,
@@ -264,7 +283,7 @@ class NotificationService {
           playSound: true,
           soundName: 'default',
           importance: 'high',
-          repeatType: 'day', // Her gün tekrarla
+          repeatType: 'day',
           vibrate: true,
           vibration: 300,
         });
@@ -296,7 +315,7 @@ class NotificationService {
       const notificationDate = new Date(Date.now() + randomHours * 60 * 60 * 1000);
 
       PushNotification.localNotificationSchedule({
-        id: `motivational-${index}`,
+        id: 200 + index, // numeric: 200–204
         channelId: 'kspeaker-reminders',
         title: msg.title,
         message: msg.message,
@@ -316,7 +335,7 @@ class NotificationService {
     tomorrow.setHours(20, 0, 0, 0); // Yarın akşam 20:00
 
     PushNotification.localNotificationSchedule({
-      id: 'streak-reminder',
+      id: 300, // numeric: fixed id for streak reminder
       channelId: 'kspeaker-reminders',
       title: '🔥 Streakini Kaybetme!',
       message: 'Bugün henüz pratik yapmadın! Hadi gel! ⏰',
@@ -339,7 +358,7 @@ class NotificationService {
     }
 
     PushNotification.localNotificationSchedule({
-      id: 'custom-reminder',
+      id: 400, // numeric: fixed id for custom reminder
       channelId: 'kspeaker-reminders',
       title,
       message,

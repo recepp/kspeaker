@@ -1,4 +1,4 @@
-import { Alert, Linking, Platform, Clipboard } from 'react-native';
+import { Alert, Linking, Platform, Share } from 'react-native';
 
 // ============================================
 // TYPES & INTERFACES (SOLID: Interface Segregation)
@@ -60,24 +60,26 @@ class EmailService {
       const canOpen = await Linking.canOpenURL(mailtoUrl);
       
       if (!canOpen) {
-        console.warn('[EmailService] ⚠️ No email app found, using fallback...');
-        
-        // FALLBACK: Copy email content to clipboard
-        const emailContent = 
+        console.warn('[EmailService] ⚠️ No email app found, using Share fallback...');
+        // Use Share sheet as fallback — works on both iOS and Android without extra packages
+        const emailContent =
           `To: ${this.SUPPORT_EMAIL}\n` +
           `Subject: ${subject}\n\n` +
           `${body}`;
-        
-        await Clipboard.setString(emailContent);
-        
+
+        try {
+          await Share.share({ message: emailContent, title: subject });
+        } catch (shareError) {
+          // User cancelled share sheet — not an error
+          console.log('[EmailService] Share cancelled or failed:', shareError);
+        }
+
         Alert.alert(
-          '📋 Email Copied',
-          `No email app found on this device.\n\n` +
-          `Email content has been copied to clipboard.\n\n` +
-          `Please paste it into your email app manually and send to:\n${this.SUPPORT_EMAIL}`,
+          '📤 Share Email Content',
+          `No email app found on this device.\n\nUse the share sheet to copy or send the content to:\n${this.SUPPORT_EMAIL}`,
           [{ text: 'OK', style: 'default' }]
         );
-        
+
         return { success: true };
       }
       
@@ -90,21 +92,18 @@ class EmailService {
     } catch (error) {
       console.error('[EmailService] Error:', error);
       
-      // Emergency fallback - copy to clipboard
+      // Emergency fallback — use Share API (no Clipboard dependency)
       try {
-        const emergencyContent = 
+        const emergencyContent =
           `To: ${this.SUPPORT_EMAIL}\n` +
           `From: ${userEmail}\n\n` +
           `${description}`;
-        
-        await Clipboard.setString(emergencyContent);
-        
-        Alert.alert(
-          '📋 Copied to Clipboard',
-          `Could not open email app.\n\nSupport email details copied to clipboard.\n\nSend to: ${this.SUPPORT_EMAIL}`,
-          [{ text: 'OK', style: 'default' }]
-        );
-        
+
+        await Share.share({
+          message: emergencyContent,
+          title: `Kspeaker Support`,
+        });
+
         return { success: true };
       } catch {
         return {

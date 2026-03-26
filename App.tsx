@@ -6,16 +6,14 @@
  */
 
 import React from 'react';
-import { StatusBar, useColorScheme } from 'react-native';
+import { StatusBar, useColorScheme, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import ChatScreen from './ChatScreen';
 import LevelSelectionScreen from './LevelSelectionScreen';
 import FlashcardScreen from './FlashcardScreen';
 import AccountDeletionScreen from './AccountDeletionScreen';
-import {
-  SafeAreaProvider,
-} from 'react-native-safe-area-context';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 const Stack = createNativeStackNavigator();
 
@@ -25,7 +23,13 @@ function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+        <StatusBar
+          barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+          // Android: must set backgroundColor explicitly; iOS ignores this prop
+          backgroundColor={isDarkMode ? '#000000' : '#FFFFFF'}
+          // Android: make status bar translucent so content draws behind it correctly
+          translucent={false}
+        />
         <Stack.Navigator
           screenOptions={{
             headerShown: false,

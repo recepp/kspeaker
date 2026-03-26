@@ -2,6 +2,9 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+// Sentry: upload source maps on release builds
+apply from: "../../node_modules/@sentry/react-native/sentry.gradle"
+
 /**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
@@ -53,6 +56,16 @@ react {
     /* Autolinking */
     autolinkLibrariesWithApp()
 }
+
+/**
+ * react-native-vector-icons: copy font files into Android assets.
+ * This is the Android equivalent of UIAppFonts in iOS Info.plist.
+ * Only the two icon sets actually used in the app are included to keep APK size minimal.
+ */
+project.ext.vectoricons = [
+    iconFontNames: [ 'Ionicons.ttf', 'MaterialCommunityIcons.ttf' ]
+]
+apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
 
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.

@@ -145,10 +145,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const toggleTheme = async () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
-    // Haptic feedback
-    if (Platform.OS === 'ios') {
-      Vibration.vibrate(10);
-    }
+    triggerHaptic('light'); // works on both iOS and Android
     try {
       await AsyncStorage.setItem('appTheme', newTheme);
     } catch (e) {
@@ -210,12 +207,11 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
   };
 
-  // Haptic feedback helper
+  // Haptic feedback helper — works on both iOS and Android
   const triggerHaptic = (type: 'light' | 'medium' | 'heavy' = 'light') => {
-    if (Platform.OS === 'ios') {
-      const duration = type === 'light' ? 10 : type === 'medium' ? 20 : 30;
-      Vibration.vibrate(duration);
-    }
+    // Vibration API works on both platforms; durations are short to feel like haptics
+    const duration = type === 'light' ? 10 : type === 'medium' ? 20 : 30;
+    Vibration.vibrate(duration);
   };
 
   // Shimmer animation
@@ -1397,6 +1393,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         visible={showVoucherModal} 
         onSubmit={handleVoucherSubmit}
         onClose={() => setShowVoucherModal(false)}
+        theme={theme}
       />
 
       {/* About Modal */}
@@ -2413,7 +2410,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                   <>
                     {/* Outer pulse */}
                     <Animated.View 
-                      pointerEvents="none"
                       style={[
                         styles.micPulse,
                         { 
@@ -2423,12 +2419,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                             outputRange: [0.4, 0],
                           }),
                           backgroundColor: '#10B981',
-                        }
+                        },
+                        { pointerEvents: 'none' }
                       ]} 
                     />
                     {/* Middle pulse */}
                     <Animated.View 
-                      pointerEvents="none"
                       style={[
                         styles.micPulse,
                         { 
@@ -2441,12 +2437,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                             outputRange: [0.5, 0.1],
                           }),
                           backgroundColor: '#10B981',
-                        }
+                        },
+                        { pointerEvents: 'none' }
                       ]} 
                     />
                     {/* Inner pulse */}
                     <Animated.View 
-                      pointerEvents="none"
                       style={[
                         styles.micPulse,
                         { 
@@ -2459,7 +2455,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                             outputRange: [0.7, 0.3],
                           }),
                           backgroundColor: '#34D399',
-                        }
+                        },
+                        { pointerEvents: 'none' }
                       ]} 
                     />
                   </>
@@ -2471,6 +2468,18 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           </View>
         </View>
       </KeyboardAvoidingView>
+      {/* Voice State Indicator */}
+      {Platform.OS === 'android' && voiceState !== 'idle' && (
+        <View style={styles.conversationModeIndicator}>
+          <View style={styles.conversationModeDot} />
+          <Text style={styles.conversationModeText}>
+            {voiceState === 'listening' ? getTranslation('listening') : voiceState === 'processing' ? getTranslation('processing') : getTranslation('speaking')}
+          </Text>
+          <Text style={styles.conversationModeHint}>
+            {voiceState === 'listening' ? 'Speak now or tap to stop' : voiceState === 'processing' ? 'Getting response...' : 'AI is responding'}
+          </Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
