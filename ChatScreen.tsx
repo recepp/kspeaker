@@ -2077,6 +2077,25 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
               Flash Cards
             </Text>
           </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={styles.drawerDivider} />
+
+          {/* 9. Delete Account */}
+          <TouchableOpacity
+            style={styles.drawerItem}
+            activeOpacity={0.7}
+            onPress={() => {
+              triggerHaptic('medium');
+              closeDrawer();
+              setTimeout(() => { (navigation as any).navigate('AccountDeletion'); }, 300);
+            }}
+          >
+            <Ionicons name="trash-outline" size={24} color="#EF4444" />
+            <Text style={[styles.drawerItemText, { color: '#EF4444' }]}>
+              {selectedLanguage === 'tr' ? 'Hesabı Sil' : selectedLanguage === 'ar' ? 'حذف الحساب' : selectedLanguage === 'ru' ? 'Удалить аккаунт' : 'Delete Account'}
+            </Text>
+          </TouchableOpacity>
         </View>
       </Animated.View>
 
