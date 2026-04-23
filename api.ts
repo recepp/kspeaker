@@ -38,18 +38,21 @@ const getHeaders = (conversationMode?: string) => {
     'X-Platform': apiState.platform,
     'X-Platform-Version': apiState.systemVersion,
     'X-App-Version': `${apiState.appVersion}+${apiState.buildNumber}`,
-    // API key should come from environment variables for security
-    'X-Api-Key': config.API_KEY || `kspeaker_secure_api_key_1`,
   };
-  
+
+  // Only add API key if configured via environment — no hardcoded fallback in binary
+  if (config.API_KEY) {
+    headers['X-Api-Key'] = config.API_KEY;
+  }
+
   if (apiState.deviceId) {
     headers['X-Device-ID'] = apiState.deviceId;
   }
-  
+
   if (conversationMode) {
     headers['X-Role-Context'] = conversationMode;
   }
-  
+
   return headers;
 };
 
@@ -121,7 +124,7 @@ export async function createVoucher(expiresAt: string): Promise<string | null> {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': config.ADMIN_API_KEY || 'kspeaker_secure_api_key_admin',
+        'x-api-key': config.ADMIN_API_KEY || '',
       },
       body: JSON.stringify({
         expiresAt

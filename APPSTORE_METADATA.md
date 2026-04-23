@@ -250,10 +250,10 @@ english,learn,speak,AI,tutor,practice,conversation,voice,chat,teacher,quiz,educa
 
 ## Support & Contact
 
-**Support URL:** https://yourdomain.com/support.html
-**Marketing URL:** https://yourdomain.com (Optional)
-**Privacy Policy URL:** https://yourdomain.com/privacy.html
-**Terms of Service URL:** https://yourdomain.com/terms.html
+**Support URL:** https://recepp.github.io/kspeaker/support.html
+**Marketing URL:** https://recepp.github.io/kspeaker (Optional)
+**Privacy Policy URL:** https://recepp.github.io/kspeaker/privacy.html
+**Terms of Service URL:** https://recepp.github.io/kspeaker/terms.html
 
 ---
 

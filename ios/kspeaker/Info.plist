@@ -36,11 +36,11 @@
 		<true/>
 	</dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Kspeaker needs access to your microphone for voice conversation and speech recognition to help you practice English speaking.</string>
+	<string>Kspeaker uses your microphone to listen to your spoken English during voice conversation practice sessions. For example, when you tap the microphone button, the app records your voice, converts it to text, and sends it to our AI tutor so it can respond and help you improve your pronunciation and fluency. Without microphone access, the voice conversation feature will not work.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Kspeaker uses speech recognition to convert your spoken English into text for AI-powered conversation practice.</string>
+	<string>Kspeaker uses Apple on-device speech recognition to transcribe your spoken English into text in real time. For example, when you practice a conversation, your speech is converted to text and sent to our AI tutor for analysis and feedback. This allows the AI to correct grammar, suggest better vocabulary, and respond naturally. Without speech recognition, voice practice will not function.</string>
 	<key>NSUserNotificationsUsageDescription</key>
-	<string>Kspeaker would like to send you daily reminders to help you maintain a consistent English practice routine.</string>
+	<string>Kspeaker sends optional daily reminders to help you maintain a consistent English practice habit. For example, you may receive a notification at your chosen time each day saying "Time to practice English!" You can disable these reminders at any time from the Settings menu inside the app or from iOS Settings.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIAppFonts</key>
