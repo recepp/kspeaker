@@ -53,14 +53,8 @@
         </intent-filter>
       </activity>
       
-      <!-- Firebase Cloud Messaging Service (iOS'ta AppDelegate'de otomatik) -->
-      <service
-          android:name="com.google.firebase.messaging.ReactNativeFirebaseMessagingService"
-          android:exported="false">
-          <intent-filter>
-              <action android:name="com.google.firebase.MESSAGING_EVENT" />
-          </intent-filter>
-      </service>
+      <!-- Firebase Messaging uses react-native-push-notification listener below.
+           Do not reference @react-native-firebase classes that are not installed. -->
       
       <!-- Notification Metadata (iOS'ta Info.plist'te tanımlı) -->
       <meta-data

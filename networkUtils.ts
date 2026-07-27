@@ -35,7 +35,7 @@ export const retryWithExponentialBackoff = async <T>(
       
       // Exponential backoff: 1s, 2s, 4s
       const delay = baseDelay * Math.pow(2, i);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
     }
   }
   

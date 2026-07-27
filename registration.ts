@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { registerUser } from './api';
+import { canSendWithQuota, FREE_DAILY_MESSAGE_LIMIT } from './src/shared/quota';
 
 const REGISTRATION_KEY = '@KSpeaker:registration';
 const VOUCHER_KEY = '@KSpeaker:voucher';
@@ -115,11 +116,13 @@ export const incrementMessageCount = async (): Promise<number> => {
 
 export const canSendMessage = async (): Promise<boolean> => {
   try {
-    const hasVoucher = await checkVoucher();
-    if (hasVoucher) return true; // Unlimited if has voucher
-    
+    const hasVoucher = !!(await checkVoucher());
     const count = await getMessageCount();
-    return count < 5; // Free users get 5 messages per day
+    return canSendWithQuota({
+      hasVoucher,
+      messageCount: count,
+      limit: FREE_DAILY_MESSAGE_LIMIT,
+    });
   } catch (error) {
     console.error('Error checking message permission:', error);
     return false;

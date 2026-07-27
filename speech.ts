@@ -1,7 +1,11 @@
 import Voice, { SpeechResultsEvent, SpeechErrorEvent } from '@react-native-community/voice';
-import { Platform, PermissionsAndroid, Alert } from 'react-native';
+import { Platform, Alert } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 import { logInfo, logError, logWarning } from './logger';
+import {
+  requestMicrophonePermission,
+  hasMicrophonePermission,
+} from './src/platform/permissions';
 
 // ============================================
 // GLOBAL TYPE DECLARATIONS
@@ -35,15 +39,12 @@ const log = {
 // ============================================
 
 const isSimulator = async (): Promise<boolean> => {
-  if (Platform.OS === 'ios') {
-    try {
-      return await DeviceInfo.isEmulator();
-    } catch (error) {
-      log.error('Voice', 'Error detecting simulator', error);
-      return false;
-    }
+  try {
+    return await DeviceInfo.isEmulator();
+  } catch (error) {
+    log.error('Voice', 'Error detecting simulator/emulator', error);
+    return false;
   }
-  return false;
 };
 
 // ============================================
@@ -371,31 +372,13 @@ class VoiceCleanupService {
 
 class VoicePermissionService {
   static async request(): Promise<boolean> {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: 'Microphone Permission',
-            message: 'Kspeaker needs microphone access for speech recognition.',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          }
-        );
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } catch (err) {
-        log.error('Voice', 'Permission request error', err);
-        return false;
-      }
-    }
-    // iOS permissions handled by Info.plist
-    return true;
+    return requestMicrophonePermission();
   }
 
   static async check(): Promise<boolean> {
-    // Voice.isAvailable() also checks permissions
     try {
+      const permissionOk = await hasMicrophonePermission();
+      if (!permissionOk) return false;
       const available = await Voice.isAvailable();
       return !!available;
     } catch (error) {
