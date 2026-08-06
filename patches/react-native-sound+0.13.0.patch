@@ -1,0 +1,36 @@
+diff --git a/node_modules/react-native-sound/src/index.ts b/node_modules/react-native-sound/src/index.ts
+index 3b50e00..2e36f49 100644
+--- a/node_modules/react-native-sound/src/index.ts
++++ b/node_modules/react-native-sound/src/index.ts
+@@ -49,7 +49,12 @@ const isRelativePath = (path: string) => {
+ 
+ let nextKey = 0;
+ 
+-const eventEmitter = new NativeEventEmitter(RNSound);
++// Guard: Proxy / missing native module is non-null but has no addListener —
++// constructing NativeEventEmitter then crashes conversation TTS paths.
++const eventEmitter =
++  SoundModule && typeof (SoundModule as { addListener?: unknown }).addListener === "function"
++    ? new NativeEventEmitter(RNSound)
++    : null;
+ 
+ class Sound {
+   private _filename: string;
+@@ -63,7 +68,7 @@ class Sound {
+   private _numberOfLoops: number;
+   private _speed: number;
+   private _pitch: number;
+-  private onPlaySubscription: EmitterSubscription;
++  private onPlaySubscription: EmitterSubscription | null = null;
+ 
+   constructor(
+     filename: string,
+@@ -119,7 +124,7 @@ class Sound {
+   }
+ 
+   private registerOnPlay() {
+-    if (this.onPlaySubscription) {
++    if (this.onPlaySubscription || !eventEmitter) {
+       return;
+     }
+ 

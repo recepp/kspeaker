@@ -8,3 +8,5 @@ export { ChatModals } from './ChatModals';
 export type { ChatModalsProps } from './ChatModals';
 export { ModeDropup } from './ModeDropup';
 export type { ModeDropupProps } from './ModeDropup';
+export { QuizLevelPicker } from './QuizLevelPicker';
+export type { QuizLevelPickerProps, QuizLevelChoice } from './QuizLevelPicker';

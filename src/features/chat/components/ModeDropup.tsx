@@ -14,10 +14,9 @@ import { BlurView } from '@react-native-community/blur';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { sendChatMessage } from '../../../../api';
 import { triggerHaptic } from '../../../platform/haptic';
-import { preprocessTextForTTS } from '../../../platform/ttsText';
-import Tts from 'react-native-tts';
+import { speakReply } from '../../../platform/speech';
 import type { ChatMessage, Theme } from '../types';
-import { CONVERSATION_MODES, type ConversationMode } from '../constants';
+import { CONVERSATION_MODES, getConversationModeIcon, type ConversationMode } from '../constants';
 import { dropupStyles } from './dropupStyles';
 
 export interface ModeDropupProps {
@@ -25,10 +24,12 @@ export interface ModeDropupProps {
   theme: Theme;
   language: string;
   conversationModeType: string | null;
+  quizActive?: boolean;
   t: (key: string) => string;
   onClose: () => void;
   onSelectMode: (mode: ConversationMode | null) => void;
   onStartQuiz: () => void;
+  onEndQuiz?: () => void;
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setTypingMessageId: (id: string | null) => void;
   setIsLoadingResponse: (loading: boolean) => void;
@@ -44,10 +45,12 @@ export function ModeDropup({
   theme,
   language,
   conversationModeType,
+  quizActive = false,
   t,
   onClose,
   onSelectMode,
   onStartQuiz,
+  onEndQuiz,
   setMessages,
   setTypingMessageId,
   setIsLoadingResponse,
@@ -136,7 +139,7 @@ export function ModeDropup({
         };
         setMessages((prev) => [...prev, assistantMsg]);
         setTypingMessageId(assistantMsg.id);
-        Tts.speak(preprocessTextForTTS(roleplayIntro));
+        speakReply(roleplayIntro, language);
       } catch (error) {
         console.log('[Roleplay] Error loading intro:', error);
         setRoleplayMode(false);
@@ -319,9 +322,7 @@ export function ModeDropup({
                       >
                         <Ionicons
                           name={
-                            conversationModeType === mode
-                              ? 'checkmark-circle'
-                              : 'radio-button-off'
+                            (getConversationModeIcon(mode) ?? 'ellipse-outline') as never
                           }
                           size={20}
                           color={
@@ -372,7 +373,10 @@ export function ModeDropup({
                       }}
                     >
                       <Ionicons
-                        name={conversationModeType ? 'settings' : 'settings-outline'}
+                        name={
+                          (getConversationModeIcon(conversationModeType) ??
+                            (conversationModeType ? 'settings' : 'settings-outline')) as never
+                        }
                         size={20}
                         color={conversationModeType ? '#10B981' : iconColor}
                       />
@@ -395,21 +399,39 @@ export function ModeDropup({
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={dropupStyles.dropupItem}
+                      style={[
+                        dropupStyles.dropupItem,
+                        quizActive ? dropupStyles.dropupItemActive : null,
+                      ]}
                       onPress={() => {
                         closeAll();
-                        onStartQuiz();
+                        if (quizActive) {
+                          onEndQuiz?.();
+                          triggerHaptic('medium');
+                        } else {
+                          onStartQuiz();
+                        }
                       }}
                     >
-                      <Ionicons name="trophy" size={20} color={iconColor} />
+                      <Ionicons
+                        name="trophy"
+                        size={20}
+                        color={quizActive ? '#10B981' : iconColor}
+                      />
                       <Text
                         style={[
                           dropupStyles.dropupItemText,
                           !isDark && dropupStyles.dropupItemTextLight,
+                          quizActive ? dropupStyles.dropupItemTextActive : null,
                         ]}
                       >
                         {t('englishQuiz')}
                       </Text>
+                      {quizActive && (
+                        <Text style={dropupStyles.dropupItemBadge}>
+                          {t('clearMode')}
+                        </Text>
+                      )}
                     </TouchableOpacity>
                   </>
                 )}

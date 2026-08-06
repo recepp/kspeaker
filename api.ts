@@ -38,7 +38,11 @@ export const initializeApi = async () => {
 };
 
 // Get headers with device ID, platform, and version information
-const getHeaders = (conversationMode?: string, responseLanguage: string = 'en') => {
+const getHeaders = (
+  conversationMode?: string,
+  responseLanguage: string = 'en',
+  roleContext?: string
+) => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...getApiLanguageHeaders(responseLanguage),
@@ -52,9 +56,14 @@ const getHeaders = (conversationMode?: string, responseLanguage: string = 'en') 
   if (apiState.deviceId) {
     headers['X-Device-ID'] = apiState.deviceId;
   }
-  
+
+  // Backend reads mode from X-Conversation-Mode (NOT X-Role-Context).
   if (conversationMode) {
-    headers['X-Role-Context'] = conversationMode;
+    headers['X-Conversation-Mode'] = conversationMode;
+    if (conversationMode === 'roleplay') {
+      headers['X-Role-Context'] =
+        roleContext || 'English practice roleplay partner';
+    }
   }
   
   return headers;
@@ -237,6 +246,83 @@ export async function sendChatMessage(
       throw error;
     }
   }, 2, 1500); // Max 2 retries with 1.5s base delay
+}
+
+/**
+ * Structured / JSON generation for flashcards & similar tasks.
+ * Uses utility mode (no chat-style wrapping) and skips emoji/language chat locks
+ * that push the model into short conversational replies.
+ */
+export async function sendStructuredGenerate(
+  text: string,
+  uiLanguage: string = 'en'
+): Promise<string> {
+  if (!apiState.deviceId) {
+    await initializeApi();
+  }
+
+  const isConnected = await checkNetworkConnection();
+  if (!isConnected) {
+    throw new Error('NETWORK_ERROR: No internet connection');
+  }
+
+  const responseLanguage = toResponseLanguage(uiLanguage);
+  const languageBody = getApiLanguageBody(responseLanguage);
+
+  return retryWithExponentialBackoff(async () => {
+    const response = await fetch(`${config.API_BASE_URL}/generate`, {
+      method: 'POST',
+      headers: getHeaders('utility', responseLanguage),
+      body: JSON.stringify({
+        text,
+        ...languageBody,
+      }),
+    });
+
+    if (response.status === 429) {
+      throw new Error('RATE_LIMIT_EXCEEDED');
+    }
+
+    // Older backends may reject unknown mode — fall back once without mode wrap
+    if (response.status === 400) {
+      const body = await response.text();
+      if (body.includes('Invalid conversation mode') || body.includes('utility')) {
+        const fallback = await fetch(`${config.API_BASE_URL}/generate`, {
+          method: 'POST',
+          headers: getHeaders(undefined, responseLanguage),
+          body: JSON.stringify({
+            text: [
+              'SYSTEM OVERRIDE: Ignore conversation style. Output ONLY the requested JSON array. No prose.',
+              text,
+            ].join('\n\n'),
+            ...languageBody,
+          }),
+        });
+        if (!fallback.ok) {
+          throw new Error(`STRUCTURED_GENERATE_FAILED:${fallback.status}`);
+        }
+        const fbData = await fallback.json();
+        const fbReply = fbData.response || fbData.reply;
+        if (!fbReply?.trim()) throw new Error('QUOTA_EXCEEDED');
+        return fbReply;
+      }
+      throw new Error(`STRUCTURED_GENERATE_FAILED:400:${body.slice(0, 120)}`);
+    }
+
+    if (!response.ok) {
+      throw new Error(`STRUCTURED_GENERATE_FAILED:${response.status}`);
+    }
+
+    const data = await response.json();
+    const reply = data.response || data.reply;
+    if (!reply || String(reply).trim() === '') {
+      throw new Error(data.message || data.error || 'QUOTA_EXCEEDED');
+    }
+    if (__DEV__) {
+      console.log('[API] Structured reply:', String(reply).substring(0, 120));
+    }
+    return reply;
+  }, 2, 1200);
 }
 
 // Generate speech using OpenAI TTS (same voice as ChatGPT)

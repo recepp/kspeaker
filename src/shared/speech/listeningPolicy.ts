@@ -12,15 +12,16 @@ export const LISTENING_POLICY = {
   /** Soft stop settle time before restarting recognizer */
   softStopDelayMs: 80,
   /**
-   * Minimal settle after TTS before Voice.start.
-   * Large gaps here cause users to speak before the mic is live
-   * and lose the first words of the turn.
+   * Settle after TTS before Voice.start.
+   * Too short → AUDIO_FORMAT / silent mic; keep enough for iOS session flip.
    */
-  postTtsHandoffMs: 60,
+  postTtsHandoffMs: 550,
+  /** Extra settle after releasing mic before device TTS speaks */
+  preTtsReleaseMs: 280,
   /** Soft retry after empty silence */
   emptyRestartDelayMs: 220,
   /** Error retry delay */
-  errorRetryDelayMs: 700,
+  errorRetryDelayMs: 900,
 } as const;
 
 export type ListeningPolicy = typeof LISTENING_POLICY;

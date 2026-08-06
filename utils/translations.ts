@@ -33,6 +33,8 @@ export type TranslationKey =
   | 'conversation'
   | 'teacher'
   | 'beginner'
+  | 'intermediate'
+  | 'advanced'
   | 'casual_friend'
   | 'strict'
   | 'roleplay'
@@ -184,6 +186,18 @@ const translations: Record<TranslationKey, Record<Language, string>> = {
   conversation: { en: 'Conversation', tr: 'Sohbet', ar: 'محادثة', ru: 'Разговор' },
   teacher: { en: 'Teacher', tr: 'Öğretmen', ar: 'معلم', ru: 'Учитель' },
   beginner: { en: 'Beginner', tr: 'Başlangıç', ar: 'مبتدئ', ru: 'Начинающий' },
+  intermediate: {
+    en: 'Intermediate',
+    tr: 'Orta',
+    ar: 'متوسط',
+    ru: 'Средний',
+  },
+  advanced: {
+    en: 'Advanced',
+    tr: 'İleri',
+    ar: 'متقدم',
+    ru: 'Продвинутый',
+  },
   casual_friend: {
     en: 'Casual Friend',
     tr: 'Arkadaş',

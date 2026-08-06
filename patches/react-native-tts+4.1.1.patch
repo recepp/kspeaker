@@ -1,8 +1,38 @@
 diff --git a/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m b/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
-index 1e769cc..de49ede 100644
+index 1e769cc..64df69d 100644
 --- a/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
 +++ b/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
-@@ -94,31 +94,17 @@ RCT_EXPORT_METHOD(speak:(NSString *)text
+@@ -78,47 +78,37 @@ RCT_EXPORT_METHOD(speak:(NSString *)text
+         utterance.pitchMultiplier = _defaultPitch;
+     }
+ 
+-    if([_ignoreSilentSwitch isEqualToString:@"ignore"]) {
+-        [[AVAudioSession sharedInstance]
+-         setCategory:AVAudioSessionCategoryPlayback
+-         mode:AVAudioSessionModeVoicePrompt
+-         // This will pause a spoken audio like podcast or audiobook and duck the volume for music
+-         options:AVAudioSessionCategoryOptionInterruptSpokenAudioAndMixWithOthers
+-         error:nil
+-        ];
+-    } else if([_ignoreSilentSwitch isEqualToString:@"obey"]) {
+-        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryAmbient error:nil];
++    // Always claim Playback after Voice/STT may have left the session in Record.
++    // Without setActive:YES, AVSpeechSynthesizer often starts+finishes with no audio.
++    {
++        NSError *sessionError = nil;
++        AVAudioSession *session = [AVAudioSession sharedInstance];
++        if([_ignoreSilentSwitch isEqualToString:@"obey"]) {
++            [session setCategory:AVAudioSessionCategoryAmbient error:&sessionError];
++        } else {
++            [session setCategory:AVAudioSessionCategoryPlayback
++                           mode:AVAudioSessionModeDefault
++                        options:AVAudioSessionCategoryOptionDuckOthers
++                          error:&sessionError];
++        }
++        [session setActive:YES error:&sessionError];
+     }
+ 
+     [self.synthesizer speakUtterance:utterance];
      resolve([NSNumber numberWithUnsignedLong:utterance.hash]);
  }
  
@@ -38,7 +68,7 @@ index 1e769cc..de49ede 100644
      BOOL paused = [self.synthesizer pauseSpeakingAtBoundary:boundary];
  
      resolve([NSNumber numberWithBool:paused]);
-@@ -132,7 +118,7 @@ RCT_EXPORT_METHOD(resume:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPro
+@@ -132,7 +122,7 @@ RCT_EXPORT_METHOD(resume:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPro
  }
  
  
@@ -47,7 +77,7 @@ index 1e769cc..de49ede 100644
                    resolve:(RCTPromiseResolveBlock)resolve
                    reject:(__unused RCTPromiseRejectBlock)reject)
  {
-@@ -178,7 +164,7 @@ RCT_EXPORT_METHOD(setDefaultVoice:(NSString *)identifier
+@@ -178,7 +168,7 @@ RCT_EXPORT_METHOD(setDefaultVoice:(NSString *)identifier
  }
  
  RCT_EXPORT_METHOD(setDefaultRate:(float)rate
@@ -56,3 +86,54 @@ index 1e769cc..de49ede 100644
                    resolve:(RCTPromiseResolveBlock)resolve
                    reject:(RCTPromiseRejectBlock)reject)
  {
+@@ -231,36 +221,25 @@ RCT_EXPORT_METHOD(voices:(RCTPromiseResolveBlock)resolve
+ 
+ -(void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer didStartSpeechUtterance:(AVSpeechUtterance *)utterance
+ {
+-    if(_ducking) {
+-        [[AVAudioSession sharedInstance] setActive:YES error:nil];
+-    }
++    [[AVAudioSession sharedInstance] setActive:YES error:nil];
+ 
+     [self sendEventWithName:@"tts-start" body:@{@"utteranceId":[NSNumber numberWithUnsignedLong:utterance.hash]}];
+ }
+ 
+ -(void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer didFinishSpeechUtterance:(AVSpeechUtterance *)utterance
+ {
+-    if(_ducking) {
+-        [[AVAudioSession sharedInstance] setActive:NO error:nil];
+-    }
+-
++    // Keep session active so a rapid next utterance / mic handoff is reliable.
+     [self sendEventWithName:@"tts-finish" body:@{@"utteranceId":[NSNumber numberWithUnsignedLong:utterance.hash]}];
+ }
+ 
+ -(void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer didPauseSpeechUtterance:(AVSpeechUtterance *)utterance
+ {
+-    if(_ducking) {
+-        [[AVAudioSession sharedInstance] setActive:NO error:nil];
+-    }
+-
+     [self sendEventWithName:@"tts-pause" body:@{@"utteranceId":[NSNumber numberWithUnsignedLong:utterance.hash]}];
+ }
+ 
+ -(void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer didContinueSpeechUtterance:(AVSpeechUtterance *)utterance
+ {
+-    if(_ducking) {
+-        [[AVAudioSession sharedInstance] setActive:YES error:nil];
+-    }
++    [[AVAudioSession sharedInstance] setActive:YES error:nil];
+ 
+     [self sendEventWithName:@"tts-resume" body:@{@"utteranceId":[NSNumber numberWithUnsignedLong:utterance.hash]}];
+ }
+@@ -275,10 +254,6 @@ RCT_EXPORT_METHOD(voices:(RCTPromiseResolveBlock)resolve
+ 
+ -(void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer didCancelSpeechUtterance:(AVSpeechUtterance *)utterance
+ {
+-    if(_ducking) {
+-        [[AVAudioSession sharedInstance] setActive:NO error:nil];
+-    }
+-
+     [self sendEventWithName:@"tts-cancel" body:@{@"utteranceId":[NSNumber numberWithUnsignedLong:utterance.hash]}];
+ }
+ 

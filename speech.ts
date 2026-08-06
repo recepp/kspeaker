@@ -135,12 +135,17 @@ interface VoiceState {
   isListening: boolean;
   callbacks: VoiceCallbacks | null;
   audioFormatErrorCount: number; // Track consecutive audio format errors
+  /** Ignore native errors while we intentionally stop/cancel (prevents UNKNOWN loops). */
+  suppressingErrors: boolean;
 }
 
 enum VoiceErrorType {
   AUDIO_FORMAT = 'AUDIO_FORMAT',
   PERMISSION = 'PERMISSION',
   INITIALIZATION = 'INITIALIZATION',
+  LOCALE = 'LOCALE',
+  BUSY = 'BUSY',
+  NO_MATCH = 'NO_MATCH',
   UNKNOWN = 'UNKNOWN',
 }
 
@@ -154,6 +159,7 @@ class VoiceStateManager {
     isListening: false,
     callbacks: null,
     audioFormatErrorCount: 0,
+    suppressingErrors: false,
   };
 
   getState(): VoiceState {
@@ -170,6 +176,14 @@ class VoiceStateManager {
 
   setCallbacks(callbacks: VoiceCallbacks | null): void {
     this.state.callbacks = callbacks;
+  }
+
+  setSuppressingErrors(value: boolean): void {
+    this.state.suppressingErrors = value;
+  }
+
+  isSuppressingErrors(): boolean {
+    return this.state.suppressingErrors;
   }
 
   incrementAudioFormatError(): void {
@@ -190,6 +204,7 @@ class VoiceStateManager {
       isListening: false,
       callbacks: null,
       audioFormatErrorCount: 0,
+      suppressingErrors: false,
     };
   }
 
@@ -202,64 +217,161 @@ class VoiceStateManager {
 // ERROR HANDLING (SOLID: Open/Closed Principle)
 // ============================================
 
+type NormalizedVoiceError = {
+  code: string;
+  message: string;
+  raw: string;
+};
+
 class VoiceErrorHandler {
-  /**
-   * Check if error is a "No speech detected" graceful shutdown
-   * This is NOT an error - it's normal iOS behavior when user stops speaking
-   */
-  static isNoSpeechDetected(error: any): boolean {
-    const errorMsg = JSON.stringify(error?.error || error?.message || error || '').toLowerCase();
-    const errorCode = error?.code || error?.error?.code || '';
-    
-    return (
-      errorCode === 'recognition_fail' ||
-      errorMsg.includes('no speech') ||
-      errorMsg.includes('1110') ||
-      errorMsg.includes('no audio') ||
-      errorMsg.includes('speech not detected')
+  static normalize(error: any): NormalizedVoiceError {
+    const nested = error?.error ?? error;
+    const code = String(
+      nested?.code ?? error?.code ?? nested?.errorCode ?? ''
+    ).toLowerCase();
+    const message = String(
+      nested?.message ?? error?.message ?? nested ?? ''
     );
+    const raw = JSON.stringify(error ?? '').toLowerCase();
+    return { code, message: message.toLowerCase(), raw };
+  }
+
+  /**
+   * Benign end-of-utterance / empty capture — treat as graceful end, not failure.
+   */
+  static isBenignEnd(error: any): boolean {
+    const { code, message, raw } = this.normalize(error);
+    const blob = `${code} ${message} ${raw}`;
+
+    // Android SpeechRecognizer codes
+    if (code === '6' || code === '7' || code === 'speech_timeout' || code === 'no_match') {
+      return true;
+    }
+
+    return (
+      code === 'recognition_fail' ||
+      blob.includes('no speech') ||
+      blob.includes('1110') ||
+      blob.includes('203') || // iOS retry / no speech-ish
+      blob.includes('no audio') ||
+      blob.includes('speech not detected') ||
+      blob.includes('no match') ||
+      blob.includes('speech timeout') ||
+      blob.includes('client side error') ||
+      blob.includes('"error":false') ||
+      blob === '""' ||
+      blob === '{}' ||
+      blob === 'null'
+    );
+  }
+
+  /** @deprecated use isBenignEnd */
+  static isNoSpeechDetected(error: any): boolean {
+    return this.isBenignEnd(error);
   }
   
   static categorizeError(error: any): VoiceErrorType {
-    const errorMsg = JSON.stringify(error?.error || error?.message || error || '');
+    const { code, message, raw } = this.normalize(error);
+    const blob = `${code} ${message} ${raw}`;
     
-    if (errorMsg.includes('IsFormatSampleRateAndChannelCountValid') ||
-        errorMsg.includes('audio format') ||
-        errorMsg.includes('sample rate') ||
-        errorMsg.includes('start_recording')) {
+    if (
+      blob.includes('isformatsamplerateandchannelcountvalid') ||
+      blob.includes('audio format') ||
+      blob.includes('sample rate') ||
+      blob.includes('start_recording') ||
+      code === '3' ||
+      code === 'audio'
+    ) {
       return VoiceErrorType.AUDIO_FORMAT;
     }
     
-    if (errorMsg.includes('permission') || errorMsg.includes('denied')) {
+    if (
+      blob.includes('permission') ||
+      blob.includes('denied') ||
+      code === '9' ||
+      code === 'insufficient_permissions'
+    ) {
       return VoiceErrorType.PERMISSION;
     }
     
-    if (errorMsg.includes('initialization') || errorMsg.includes('not initialized')) {
+    if (blob.includes('initialization') || blob.includes('not initialized')) {
       return VoiceErrorType.INITIALIZATION;
+    }
+
+    if (code === '8' || blob.includes('busy') || blob.includes('already')) {
+      return VoiceErrorType.BUSY;
+    }
+
+    if (this.isBenignEnd(error)) {
+      return VoiceErrorType.NO_MATCH;
+    }
+
+    // Language switch / missing speech locale on device
+    if (
+      blob.includes('locale') ||
+      blob.includes('language') ||
+      blob.includes('recognizer') ||
+      blob.includes('not available') ||
+      blob.includes('l10n')
+    ) {
+      return VoiceErrorType.LOCALE;
     }
     
     return VoiceErrorType.UNKNOWN;
   }
 
   static async handleError(errorType: VoiceErrorType, stateManager: VoiceStateManager): Promise<boolean> {
-    log.error('Voice', `Error type: ${errorType}`);
+    // Benign / busy → quiet recovery (no ERROR log spam)
+    if (errorType === VoiceErrorType.NO_MATCH || errorType === VoiceErrorType.BUSY) {
+      if (__DEV__) log.info('Voice', `Soft speech event: ${errorType}`);
+      stateManager.setListening(false);
+      return true;
+    }
+
+    if (errorType === VoiceErrorType.UNKNOWN) {
+      log.warning('Voice', `Error type: ${errorType}`);
+    } else {
+      log.error('Voice', `Error type: ${errorType}`);
+    }
     
     switch (errorType) {
-      case VoiceErrorType.AUDIO_FORMAT:
+      case VoiceErrorType.AUDIO_FORMAT: {
         stateManager.incrementAudioFormatError();
         const errorCount = stateManager.getAudioFormatErrorCount();
-        
-        log.warning('Voice', `Audio format error (#${errorCount}) - performing aggressive reset...`);
-        
-        // CRITICAL: Exponential backoff for iOS audio session recovery
-        const waitTime = Math.min(1000 * errorCount, 3000); // 1s, 2s, 3s max
-        log.info('Voice', `Waiting ${waitTime}ms for iOS audio session to stabilize...`);
-        
-        await VoiceCleanupService.aggressiveReset(waitTime);
-        stateManager.reset();
-        
-        // Return false if too many errors (unrecoverable)
-        return errorCount < 3;
+        // Aggressive destroy breaks BOTH mic and TTS audio session on iOS.
+        // Soft-recover first; only nuke after repeated failures.
+        log.warning(
+          'Voice',
+          `Audio format error (#${errorCount}) — soft session recovery`
+        );
+        stateManager.setSuppressingErrors(true);
+        try {
+          try {
+            await Voice.stop();
+          } catch {
+            // ignore
+          }
+          try {
+            await Voice.cancel();
+          } catch {
+            // ignore
+          }
+          await new Promise<void>((r) =>
+            setTimeout(r, Math.min(400 * errorCount, 1600))
+          );
+        } finally {
+          stateManager.setSuppressingErrors(false);
+        }
+        stateManager.setListening(false);
+
+        if (errorCount >= 3) {
+          log.warning('Voice', 'Repeated AUDIO_FORMAT — aggressive reset once');
+          await VoiceCleanupService.aggressiveReset(800);
+          stateManager.reset();
+          return false;
+        }
+        return true;
+      }
         
       case VoiceErrorType.PERMISSION:
         log.warning('Voice', 'Permission error - cannot recover');
@@ -270,9 +382,15 @@ class VoiceErrorHandler {
         log.warning('Voice', 'Initialization error - resetting state');
         stateManager.setInitialized(false);
         return true;
+
+      case VoiceErrorType.LOCALE:
+        log.warning('Voice', 'Locale/recognizer error — soft cleanup');
+        await VoiceCleanupService.softCleanup();
+        stateManager.setListening(false);
+        return true;
         
       default:
-        // For UNKNOWN errors, just do a soft reset without excessive logging
+        // UNKNOWN: do NOT tear down listeners here (stop() would re-enter onSpeechError).
         stateManager.setListening(false);
         return true;
     }
@@ -295,14 +413,17 @@ class VoiceCleanupService {
     try {
       const recognizing = await Voice.isRecognizing();
       if (recognizing) {
+        stateManager.setSuppressingErrors(true);
         try {
           await Voice.stop();
         } catch {
           // ignore
         }
         await this.delay(LISTENING_POLICY.softStopDelayMs);
+        stateManager.setSuppressingErrors(false);
       }
     } catch (error) {
+      stateManager.setSuppressingErrors(false);
       log.warning('Voice', 'prepareForStart check failed (continuing)', error);
     }
   }
@@ -310,6 +431,7 @@ class VoiceCleanupService {
   static async softCleanup(): Promise<void> {
     try {
       log.info('Voice', 'Soft cleanup...');
+      stateManager.setSuppressingErrors(true);
       try {
         await Voice.stop();
       } catch {
@@ -319,12 +441,15 @@ class VoiceCleanupService {
       Voice.removeAllListeners();
     } catch (error) {
       log.error('Voice', 'Soft cleanup error', error);
+    } finally {
+      stateManager.setSuppressingErrors(false);
     }
   }
 
   static async aggressiveReset(additionalWait: number = 0): Promise<void> {
     try {
       log.info('Voice', 'AGGRESSIVE RESET - destroying iOS audio session...');
+      stateManager.setSuppressingErrors(true);
       
       // Step 1: Stop any active recognition
       try {
@@ -370,6 +495,8 @@ class VoiceCleanupService {
       log.info('Voice', 'Aggressive reset complete');
     } catch (error) {
       log.error('Voice', 'Aggressive reset error', error);
+    } finally {
+      stateManager.setSuppressingErrors(false);
     }
   }
 
@@ -380,11 +507,14 @@ class VoiceCleanupService {
   static async cancel(): Promise<void> {
     try {
       log.info('Voice', 'Cancelling...');
+      stateManager.setSuppressingErrors(true);
       await Voice.cancel();
       await this.delay(200);
       Voice.removeAllListeners();
     } catch (error) {
       log.error('Voice', 'Cancel error', error);
+    } finally {
+      stateManager.setSuppressingErrors(false);
     }
   }
 }
@@ -458,15 +588,26 @@ class VoiceEventService {
     };
 
     Voice.onSpeechError = async (event: SpeechErrorEvent) => {
-      log.warning('Voice', 'Speech error', event?.error);
+      // stop()/cancel() often emit a follow-up error — ignore those
+      if (stateManager.isSuppressingErrors()) {
+        if (__DEV__) log.info('Voice', 'Ignoring speech error during intentional stop');
+        return;
+      }
+
+      const norm = VoiceErrorHandler.normalize(event?.error ?? event);
+      log.warning('Voice', 'Speech error', { code: norm.code, message: norm.message });
       this.clearPendingEnd();
       
       const callbacks = stateManager.getState().callbacks;
+      const errorType = VoiceErrorHandler.categorizeError(event);
 
-      if (VoiceErrorHandler.isNoSpeechDetected(event?.error)) {
-        log.info('Voice', 'No speech detected - graceful shutdown');
+      // Empty / timeout / no-match → same as natural end (send if we have text)
+      if (
+        errorType === VoiceErrorType.NO_MATCH ||
+        VoiceErrorHandler.isBenignEnd(event?.error)
+      ) {
+        log.info('Voice', 'Benign speech end — finalize if any text');
         stateManager.setListening(false);
-        // Grace so a late final result can still land
         this.endGraceTimer = setTimeout(() => {
           this.endGraceTimer = null;
           callbacks?.onEnd?.();
@@ -474,7 +615,18 @@ class VoiceEventService {
         return;
       }
 
-      const errorType = VoiceErrorHandler.categorizeError(event);
+      // Recognizer busy after TTS handoff — quiet soft retry via onError
+      if (errorType === VoiceErrorType.BUSY) {
+        stateManager.setListening(false);
+        await VoiceErrorHandler.handleError(errorType, stateManager);
+        if (callbacks?.onError) {
+          const errorCallback = callbacks.onError;
+          stateManager.setCallbacks(null);
+          errorCallback();
+        }
+        return;
+      }
+
       const canRecover = await VoiceErrorHandler.handleError(errorType, stateManager);
       
       if (callbacks?.onError) {
@@ -566,8 +718,41 @@ export interface StartListeningOptions {
 let voiceAvailableCache: boolean | null = null;
 
 /**
+ * Release the mic / audio session so device TTS can play.
+ * Must run before every speak — overlapping Voice recognition causes
+ * AUDIO_FORMAT and total silence on iOS.
+ */
+export async function releaseMicForPlayback(): Promise<void> {
+  try {
+    stateManager.setSuppressingErrors(true);
+    VoiceEventService.clearPendingEnd();
+    try {
+      await Voice.stop();
+    } catch {
+      // ignore
+    }
+    try {
+      await Voice.cancel();
+    } catch {
+      // ignore
+    }
+    stateManager.setListening(false);
+    await new Promise<void>((r) =>
+      setTimeout(r, LISTENING_POLICY.preTtsReleaseMs)
+    );
+  } catch (error) {
+    log.warning('Voice', 'releaseMicForPlayback failed (continuing)', error);
+  } finally {
+    stateManager.setSuppressingErrors(false);
+  }
+}
+
+/**
  * Warm the voice stack while TTS is speaking so Voice.start is near-instant
  * when the assistant finishes (prevents missing the user's first words).
+ *
+ * IMPORTANT: Do NOT call this while TTS is playing — it steals the session.
+ * Only call after speech ends, before startListening.
  */
 export async function primeVoiceSession(): Promise<void> {
   try {
@@ -639,17 +824,16 @@ export async function startListening(
     VoiceEventService.setup(stateManager);
 
     log.info('Voice', `Starting recognition with locale ${locale}...`);
-    if (Platform.OS === 'android') {
-      await Voice.start(locale, {
-        EXTRA_LANGUAGE_MODEL: 'LANGUAGE_MODEL_FREE_FORM',
-        EXTRA_MAX_RESULTS: 5,
-        EXTRA_PARTIAL_RESULTS: true,
-        EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
-        EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 1500,
-        EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 800,
-      });
-    } else {
-      await Voice.start(locale);
+    try {
+      await startNativeRecognition(locale);
+    } catch (startError) {
+      // Locale pack missing → fall back to en-US once, then surface error
+      if (locale !== 'en-US' && VoiceErrorHandler.categorizeError(startError) === VoiceErrorType.LOCALE) {
+        log.warning('Voice', `Locale ${locale} failed — retrying en-US`);
+        await startNativeRecognition('en-US');
+      } else {
+        throw startError;
+      }
     }
     stateManager.setListening(true);
     voiceAvailableCache = true;
@@ -665,6 +849,21 @@ export async function startListening(
     await VoiceErrorHandler.handleError(errorType, stateManager);
     
     onError?.();
+  }
+}
+
+async function startNativeRecognition(locale: string): Promise<void> {
+  if (Platform.OS === 'android') {
+    await Voice.start(locale, {
+      EXTRA_LANGUAGE_MODEL: 'LANGUAGE_MODEL_FREE_FORM',
+      EXTRA_MAX_RESULTS: 5,
+      EXTRA_PARTIAL_RESULTS: true,
+      EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
+      EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 1500,
+      EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 800,
+    });
+  } else {
+    await Voice.start(locale);
   }
 }
 

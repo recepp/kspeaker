@@ -2,16 +2,17 @@ import Tts from 'react-native-tts';
 import { Platform } from 'react-native';
 import {
   getPlatformTtsDefaults,
+  listVoiceCandidates,
   selectOptimalVoice,
   type TtsVoiceLike,
 } from './ttsConfig';
 
-export { getPlatformTtsDefaults, selectOptimalVoice };
+export { getPlatformTtsDefaults, selectOptimalVoice, listVoiceCandidates };
 export type { TtsVoiceLike };
 
 /**
  * Apply shared TTS configuration for the current screen language.
- * Each step is isolated so a single native rejection does not block speech.
+ * Language-first; voice pick is best-effort and never blocks speech.
  */
 export async function configureTtsEngine(uiLanguage: string = 'en'): Promise<void> {
   const defaults = getPlatformTtsDefaults(uiLanguage);
@@ -19,21 +20,41 @@ export async function configureTtsEngine(uiLanguage: string = 'en'): Promise<voi
   try {
     await Tts.setDefaultLanguage(defaults.language);
   } catch (error) {
-    console.warn('[TTS] setDefaultLanguage failed, using system default:', error);
+    console.warn('[TTS] setDefaultLanguage failed, continuing with voice probe:', error);
   }
 
   try {
     const voices = (await Tts.voices()) as TtsVoiceLike[];
-    const selected = selectOptimalVoice(voices, uiLanguage);
-    if (selected) {
-      await Tts.setDefaultVoice(selected.id);
+    const candidates = listVoiceCandidates(voices, uiLanguage);
+    let applied = false;
+    for (const candidate of candidates.slice(0, 5)) {
+      try {
+        await Tts.setDefaultVoice(candidate.id);
+        applied = true;
+        if (__DEV__) {
+          console.log(
+            '[TTS] Voice set:',
+            candidate.name,
+            candidate.language,
+            `q=${candidate.quality ?? '?'}`,
+            `(${uiLanguage})`
+          );
+        }
+        break;
+      } catch {
+        // try next installed voice
+      }
+    }
+    if (!applied && __DEV__) {
+      console.warn('[TTS] No setDefaultVoice candidate worked; using language default');
     }
   } catch (error) {
     console.warn('[TTS] voice selection failed, using language default:', error);
   }
 
   try {
-    await Tts.setDefaultRate(defaults.rate);
+    // skipTransform=true on Android so 0.5 stays mid-speed
+    await Tts.setDefaultRate(defaults.rate, true);
   } catch (error) {
     console.warn('[TTS] setDefaultRate failed:', error);
   }
@@ -46,6 +67,8 @@ export async function configureTtsEngine(uiLanguage: string = 'en'): Promise<voi
 
   if (Platform.OS === 'ios') {
     try {
+      // Ducking flag also historically gated setActive; we now always activate
+      // in native speak(), but keep ducking on for polite mix with other audio.
       await Tts.setDucking(true);
       await Tts.setIgnoreSilentSwitch('ignore');
     } catch {

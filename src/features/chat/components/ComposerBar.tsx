@@ -13,6 +13,7 @@ import { BlurView } from '@react-native-community/blur';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { triggerHaptic } from '../../../platform/haptic';
 import type { Theme, VoiceState } from '../types';
+import { getConversationModeIcon } from '../constants';
 import { LiquidGlassButton } from './LiquidGlassButton';
 
 export interface ComposerBarProps {
@@ -26,6 +27,8 @@ export interface ComposerBarProps {
   onOpenModes: () => void;
   onInputFocus: () => void;
   voiceState: VoiceState;
+  /** Active conversation mode — shows green mode icon beside + */
+  conversationModeType?: string | null;
   liveTranscript: string;
   messageCount: number;
   inputRef: RefObject<TextInput | null>;
@@ -51,6 +54,7 @@ export function ComposerBar({
   onOpenModes,
   onInputFocus,
   voiceState,
+  conversationModeType = null,
   liveTranscript,
   messageCount,
   inputRef,
@@ -231,6 +235,15 @@ export function ComposerBar({
             style={styles.plusHit}
           >
             <Ionicons name="add" size={28} color={plusColor} />
+            {!!getConversationModeIcon(conversationModeType) && (
+              <View style={styles.modeBadge} pointerEvents="none">
+                <Ionicons
+                  name={getConversationModeIcon(conversationModeType) as never}
+                  size={12}
+                  color="#10B981"
+                />
+              </View>
+            )}
           </TouchableOpacity>
 
           <View style={styles.inputWrap}>
@@ -437,10 +450,23 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   plusHit: {
-    width: 32,
+    width: 36,
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  modeBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: 6,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(16, 185, 129, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   inputWrap: {
     flex: 1,

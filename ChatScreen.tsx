@@ -6,21 +6,45 @@ import { sendChatMessage, initializeApi, registerUser } from './api';
 import { checkRegistration, saveRegistration } from './registration';
 import { startListening, stopListening, primeVoiceSession } from './speech';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import Tts from 'react-native-tts';
 import LinearGradient from 'react-native-linear-gradient';
 import { logError, logInfo, logWarning } from './logger';
-import { ComposerBar, SideDrawer, ChatModals, ModeDropup } from './src/features/chat/components';
+import { ComposerBar, SideDrawer, ChatModals, ModeDropup, QuizLevelPicker } from './src/features/chat/components';
+import type { QuizLevelChoice } from './src/features/chat/components';
 import { getErrorDisplayMessage } from './src/shared/chat/resolveApiErrorMessage';
-import { preprocessTextForTTS } from './src/platform/ttsText';
 import { getTranslation as translate } from './utils/translations';
 import type { TranslationKey } from './utils/translations';
 import { triggerHaptic } from './src/platform/haptic';
 import { configureTtsEngine } from './src/platform/tts';
+import { speakReply, stopSpeaking } from './src/platform/speech';
 import { getSpeechLocale } from './src/shared/language/appLanguageConfig';
 import { LISTENING_POLICY } from './src/shared/speech/listeningPolicy';
 import { mergeTranscript } from './src/shared/speech/mergeTranscript';
 import { useAppTheme, useAppLanguage, useNotificationSettings } from './src/features/chat/hooks';
 import type { ChatMessage, VoiceState } from './src/features/chat/types';
+
+const QUIZ_LEVEL_PROMPTS: Record<
+  QuizLevelChoice,
+  { level: string; prompt: string; label: string }
+> = {
+  '1': {
+    level: 'beginner',
+    label: 'Beginner',
+    prompt:
+      'I want to take an English quiz at beginner level. Please give me 5 simple questions about basic English vocabulary and grammar. Number them 1-5.',
+  },
+  '2': {
+    level: 'intermediate',
+    label: 'Intermediate',
+    prompt:
+      'I want to take an English quiz at intermediate level. Please give me 5 questions about English grammar, vocabulary and comprehension. Number them 1-5.',
+  },
+  '3': {
+    level: 'advanced',
+    label: 'Advanced',
+    prompt:
+      'I want to take an English quiz at advanced level. Please give me 5 challenging questions about advanced English, idioms, and complex grammar. Number them 1-5.',
+  },
+};
 
 interface ChatScreenProps {
   navigation?: any;
@@ -337,7 +361,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           setQuizLevel('advanced');
           reply = await sendChatMessage('I want to take an English quiz at advanced level. Please give me 5 challenging questions about advanced English, idioms, and complex grammar. Number them 1-5.', conversationModeRef.current || undefined, selectedLanguageRef.current);
         } else {
-          reply = 'Please type 1 for Beginner, 2 for Intermediate, or 3 for Advanced.';
+          reply = 'Please tap Beginner, Intermediate, or Advanced below.';
         }
       } else if (quizMode && quizLevel) {
         // Quiz in progress
@@ -416,10 +440,57 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       setMessages(prev => [...prev, assistantMsg]);
       setTypingMessageId(assistantMsg.id);
       
-      // Speak ASAP — no artificial lead-in (conversation turn-taking)
-      const processedText = preprocessTextForTTS(reply);
+      // Leave "processing" immediately; speakReply drives speaking → listen
+      setVoiceState('speaking');
+      voiceStateRef.current = 'speaking';
       console.log('[TTS] 🔊 Speaking reply');
-      Tts.speak(processedText);
+      speakReply(reply, selectedLanguageRef.current, {
+        onStart: () => {
+          console.log('[TTS] 🔊 Started speaking');
+          setVoiceState('speaking');
+          voiceStateRef.current = 'speaking';
+          // Do NOT prime Voice here — it steals the audio session and kills TTS/ElevenLabs playback
+        },
+        onFinish: () => {
+          console.log('[TTS] ✅ Finished speaking');
+          if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
+            console.log('[Voice] 🔄 TTS finished — mic handoff');
+            // Delay priming until after speech; immediate Voice.prepare steals session mid-handoff
+            setTimeout(() => {
+              if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
+                primeVoiceSession()
+                  .catch(() => {})
+                  .finally(() => {
+                    if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
+                      startVoiceConversationRef.current(false, 'fast');
+                    }
+                  });
+              }
+            }, LISTENING_POLICY.postTtsHandoffMs);
+          }
+        },
+        onCancel: () => {
+          console.log('[TTS] ⛔ Cancelled');
+          if (!userStoppedVoice.current && voiceStateRef.current === 'speaking') {
+            setTimeout(() => {
+              if (!userStoppedVoice.current && voiceStateRef.current === 'speaking') {
+                primeVoiceSession()
+                  .catch(() => {})
+                  .finally(() => {
+                    startVoiceConversationRef.current(false, 'fast');
+                  });
+              }
+            }, LISTENING_POLICY.postTtsHandoffMs);
+          }
+        },
+      }).catch((error) => {
+        console.error('[TTS] speakReply failed:', error);
+        if (!userStoppedVoice.current) {
+          setTimeout(() => {
+            startVoiceConversationRef.current(false, 'fast');
+          }, LISTENING_POLICY.postTtsHandoffMs);
+        }
+      });
       
     } catch (e: any) {
       if (__DEV__) {
@@ -439,7 +510,18 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     console.log('[Chat] 🗑️ Clearing all messages');
     setMessages([]);
     setInput('');
+    setQuizMode(false);
+    setQuizLevel(null);
+    setQuizQuestionCount(0);
+    setRoleplayMode(false);
+    setRoleplayScenario(null);
     stopVoiceConversation();
+  };
+
+  const endQuizMode = () => {
+    setQuizMode(false);
+    setQuizLevel(null);
+    setQuizQuestionCount(0);
   };
 
   // Scroll to bottom
@@ -499,6 +581,30 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const selectLanguage = async (lang: 'en' | 'tr' | 'ar' | 'ru') => {
     await persistLanguage(lang);
     setShowLanguageModal(false);
+    // Rebind TTS to any installed system voice for the new language
+    try {
+      await configureTtsEngine(lang);
+    } catch (error) {
+      console.warn('[Language] configureTtsEngine failed:', error);
+    }
+    // If conversation is live, soft-restart STT with the new locale
+    if (
+      voiceStateRef.current === 'listening' ||
+      voiceStateRef.current === 'speaking' ||
+      voiceStateRef.current === 'processing'
+    ) {
+      try {
+        await stopSpeaking();
+        stopListening();
+      } catch {
+        // ignore
+      }
+      setTimeout(() => {
+        if (!userStoppedVoice.current) {
+          startVoiceConversationRef.current(false, 'fast');
+        }
+      }, 350);
+    }
   };
 
   const startEnglishQuiz = async () => {
@@ -507,7 +613,8 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setQuizLevel(null);
     setQuizQuestionCount(0);
     
-    const quizStartMessage = "Welcome to the English Quiz! 🎯\n\nPlease select your English level:\n\n1️⃣ Beginner - Basic vocabulary and simple sentences\n2️⃣ Intermediate - More complex grammar and conversations\n3️⃣ Advanced - Advanced vocabulary and complex topics\n\nJust type the number (1, 2, or 3) to start!";
+    const quizStartMessage =
+      "Welcome to the English Quiz! 🎯\n\nPlease select your English level:\n\n1️⃣ Beginner — Basic vocabulary and simple sentences\n2️⃣ Intermediate — More complex grammar and conversations\n3️⃣ Advanced — Advanced vocabulary and complex topics\n\nTap a level button below to start.";
     
     const assistantMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -517,6 +624,50 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     
     setMessages(prev => [...prev, assistantMsg]);
     setTypingMessageId(assistantMsg.id);
+  };
+
+  /** Start quiz at a chosen level via the bottom chips (no keyboard needed). */
+  const selectQuizLevel = async (choice: QuizLevelChoice) => {
+    if (!quizMode || quizLevel || isSending.current) return;
+
+    const meta = QUIZ_LEVEL_PROMPTS[choice];
+    isSending.current = true;
+    Keyboard.dismiss();
+    setIsLoadingResponse(true);
+
+    const userMsg: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: meta.label,
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setQuizLevel(meta.level);
+
+    try {
+      const reply = await sendChatMessage(
+        meta.prompt,
+        conversationModeRef.current || undefined,
+        selectedLanguageRef.current
+      );
+      const assistantMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: reply,
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+      setTypingMessageId(assistantMsg.id);
+    } catch (e: any) {
+      if (__DEV__) {
+        console.log('[Quiz] Level select error:', (e as Error).message || e);
+      }
+      setQuizLevel(null);
+      setErrorMessage(getErrorDisplayMessage(e, getTranslation));
+      setShowApprovalModal(true);
+      setMessages((prev) => prev.slice(0, -1));
+    } finally {
+      setIsLoadingResponse(false);
+      isSending.current = false;
+    }
   };
 
   const getTranslation = (key: string) => translate(key as TranslationKey, selectedLanguage);
@@ -621,6 +772,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           clearTimeout(silenceTimer.current);
           silenceTimer.current = null;
         }
+
+        // If we already captured text, send it instead of retrying into UNKNOWN loops
+        const pending = currentVoiceText.current.trim();
+        if (pending.length > 0 && voiceStateRef.current === 'listening') {
+          finalizeAndSend('onError-with-text');
+          return;
+        }
         
         voiceRetryCount.current++;
         if (voiceRetryCount.current >= 3) {
@@ -633,6 +791,14 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
             console.log('[Voice] 🔄 Retrying after error... (attempt', voiceRetryCount.current, '/3)');
             startVoiceConversation(true, 'normal');
+          } else if (
+            voiceStateRef.current === 'listening' ||
+            voiceStateRef.current === 'processing'
+          ) {
+            // State may have flipped during soft cleanup — recover listen loop
+            if (!userStoppedVoice.current) {
+              startVoiceConversation(true, 'fast');
+            }
           } else {
             console.log('[Voice] 🛑 Not retrying - user stopped or state changed');
           }
@@ -663,7 +829,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     }
     
     stopListening();
-    Tts.stop();
+    stopSpeaking();
     currentVoiceText.current = '';
     setLiveTranscript('');
     setVoiceState('idle');
@@ -710,7 +876,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     initVoice();
   }, []);
 
-  // Keep TTS locale aligned with screen language (no event rebind cost)
+  // Keep device TTS locale aligned with screen language (ElevenLabs uses multilingual model)
   useEffect(() => {
     console.log('[TTS] 🔧 Configuring TTS for language:', selectedLanguage);
     configureTtsEngine(selectedLanguage).catch((error) => {
@@ -718,51 +884,13 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     });
   }, [selectedLanguage]);
 
-  // TTS Events - Integrated with voice conversation
-  // Listeners registered once; always call latest startVoiceConversation via ref
-  // so screen-language changes (TR/AR/RU) apply on every turn.
-  useEffect(() => {
-    Tts.addEventListener('tts-start', () => {
-      console.log('[TTS] 🔊 Started speaking');
-      setVoiceState('speaking');
-      voiceStateRef.current = 'speaking';
-      // Warm STT while AI talks so mic opens instantly on finish
-      primeVoiceSession().catch(() => {});
-    });
-    
-    Tts.addEventListener('tts-finish', () => {
-      console.log('[TTS] ✅ Finished speaking');
-      
-      if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
-        console.log('[Voice] 🔄 TTS finished — fast mic handoff');
-        setTimeout(() => {
-          if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
-            // fast: skip availability/prepare lag so first words are not lost
-            startVoiceConversationRef.current(false, 'fast');
-          }
-        }, LISTENING_POLICY.postTtsHandoffMs);
-      } else {
-        console.log('[Voice] 🛑 Not restarting - user stopped or state changed');
-      }
-    });
-    
-    Tts.addEventListener('tts-cancel', () => {
-      console.log('[TTS] ⛔ Cancelled');
-    });
-
-    return () => {
-      Tts.removeAllListeners('tts-start');
-      Tts.removeAllListeners('tts-finish');
-      Tts.removeAllListeners('tts-cancel');
-    };
-  }, []);
-
   // Cleanup voice silence timer
   useEffect(() => {
     return () => {
       if (silenceTimer.current) {
         clearTimeout(silenceTimer.current);
       }
+      stopSpeaking();
     };
   }, []);
 
@@ -844,7 +972,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 style={styles.contextMenuItem}
                 onPress={() => {
                   triggerHaptic('light');
-                  Tts.speak(preprocessTextForTTS(item.content));
+                  speakReply(item.content, selectedLanguageRef.current);
                   setMessageContextMenu(null);
                 }}
               >
@@ -1034,8 +1162,14 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
             conversationModeType={conversationModeType}
             t={getTranslation}
             onClose={() => setShowDropup(false)}
-            onSelectMode={(mode) => setConversationModeType(mode)}
+            onSelectMode={(mode) => {
+              // Leaving / changing modes exits quiz so level chips disappear
+              endQuizMode();
+              setConversationModeType(mode);
+            }}
             onStartQuiz={startEnglishQuiz}
+            quizActive={quizMode}
+            onEndQuiz={endQuizMode}
             setMessages={setMessages}
             setTypingMessageId={setTypingMessageId}
             setIsLoadingResponse={setIsLoadingResponse}
@@ -1044,6 +1178,18 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           />
 
           <View style={[styles.composerInner, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+            {quizMode && !quizLevel && (
+              <QuizLevelPicker
+                theme={theme}
+                disabled={isLoadingResponse}
+                labels={{
+                  beginner: getTranslation('beginner'),
+                  intermediate: getTranslation('intermediate'),
+                  advanced: getTranslation('advanced'),
+                }}
+                onSelect={selectQuizLevel}
+              />
+            )}
             <ComposerBar
               theme={theme}
               input={input}
@@ -1060,6 +1206,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 }, 300);
               }}
               voiceState={voiceState}
+              conversationModeType={conversationModeType}
               liveTranscript={liveTranscript}
               messageCount={messages.length}
               inputRef={inputRef}
