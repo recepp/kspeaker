@@ -1,4 +1,4 @@
-import { StyleSheet, Dimensions } from 'react-native';
+import { StyleSheet, Dimensions, Platform } from 'react-native';
 
 export const modalStyles = StyleSheet.create({
   modalOverlay: {
@@ -314,93 +314,78 @@ export const modalStyles = StyleSheet.create({
   socialButton: {
     padding: 8,
   },
-  // Voucher Styles
-  voucherSection: {
-    marginBottom: 20,
-  },
-  voucherTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#ECECEC',
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  voucherTitleLight: {
-    color: '#1A1A1F',
-  },
-  voucherText: {
+  // Device Information Styles
+  deviceInfoIntro: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.8)',
+    color: 'rgba(255, 255, 255, 0.75)',
     lineHeight: 20,
     textAlign: 'center',
+    marginBottom: 20,
   },
-  voucherTextLight: {
-    color: 'rgba(0, 0, 0, 0.7)',
+  deviceInfoIntroLight: {
+    color: 'rgba(0, 0, 0, 0.65)',
   },
-  voucherInputContainer: {
-    marginVertical: 16,
+  deviceInfoRow: {
+    marginBottom: 14,
   },
-  voucherInput: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(125, 211, 192, 0.3)',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: '#ECECEC',
-    textAlign: 'center',
+  deviceInfoLabel: {
+    fontSize: 12,
     fontWeight: '600',
-    letterSpacing: 2,
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
-  voucherInputLight: {
-    backgroundColor: '#F3F4F6',
-    borderColor: '#D1D5DB',
+  deviceInfoLabelLight: {
+    color: 'rgba(0, 0, 0, 0.45)',
+  },
+  deviceInfoValue: {
+    fontSize: 15,
+    color: '#ECECEC',
+    fontWeight: '500',
+  },
+  deviceInfoValueLight: {
     color: '#1A1A1F',
   },
-  voucherButton: {
+  deviceIdBox: {
+    backgroundColor: 'rgba(125, 211, 192, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(125, 211, 192, 0.28)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  deviceIdBoxLight: {
+    backgroundColor: '#F3F4F6',
+    borderColor: '#D1D5DB',
+  },
+  deviceIdValue: {
+    fontSize: 14,
+    color: '#7DD3C0',
+    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    lineHeight: 20,
+  },
+  deviceIdValueLight: {
+    color: '#4A9B8F',
+  },
+  deviceInfoCopyButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    gap: 10,
     backgroundColor: '#7DD3C0',
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 12,
+    marginTop: 8,
   },
-  voucherButtonLight: {
+  deviceInfoCopyButtonLight: {
     backgroundColor: '#4A6FA5',
   },
-  voucherButtonText: {
+  deviceInfoCopyButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
-  },
-  voucherDivider: {
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginVertical: 24,
-  },
-  voucherInfoTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#ECECEC',
-    marginBottom: 12,
-  },
-  voucherInfoTitleLight: {
-    color: '#1A1A1F',
-  },
-  voucherFeature: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 10,
-  },
-  voucherFeatureText: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.8)',
-  },
-  voucherFeatureTextLight: {
-    color: 'rgba(0, 0, 0, 0.7)',
   },
 });

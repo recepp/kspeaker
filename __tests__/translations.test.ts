@@ -4,7 +4,8 @@ describe('shared translations', () => {
   it('returns localized drawer keys', () => {
     expect(getTranslation('faq', 'tr')).toContain('Sorulan');
     expect(getTranslation('deleteAccount', 'en')).toBe('Delete Account');
-    expect(getTranslation('addVoucher', 'ru')).toContain('ваучер');
+    expect(getTranslation('deviceInformation', 'en')).toBe('Device Information');
+    expect(getTranslation('copyDeviceId', 'tr')).toContain('Kopyala');
   });
 
   it('falls back to english for unknown language entry usage', () => {

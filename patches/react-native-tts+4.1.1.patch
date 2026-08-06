@@ -1,149 +1,58 @@
-diff --git a/node_modules/react-native-tts/index.js b/node_modules/react-native-tts/index.js
-index 6da7573..72f5eaa 100644
---- a/node_modules/react-native-tts/index.js
-+++ b/node_modules/react-native-tts/index.js
-@@ -93,9 +93,9 @@ class Tts extends NativeEventEmitter {
-     }
-   }
+diff --git a/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m b/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
+index 1e769cc..de49ede 100644
+--- a/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
++++ b/node_modules/react-native-tts/ios/TextToSpeech/TextToSpeech.m
+@@ -94,31 +94,17 @@ RCT_EXPORT_METHOD(speak:(NSString *)text
+     resolve([NSNumber numberWithUnsignedLong:utterance.hash]);
+ }
  
--  stop(onWordBoundary) {
-+  stop() {
-     if (Platform.OS === 'ios') {
--      return TextToSpeech.stop(onWordBoundary);
-+      return TextToSpeech.stop();
-     } else {
-       return TextToSpeech.stop();
-     }
-diff --git a/node_modules/react-native-tts/index.js.orig b/node_modules/react-native-tts/index.js.orig
-new file mode 100644
-index 0000000..6da7573
---- /dev/null
-+++ b/node_modules/react-native-tts/index.js.orig
-@@ -0,0 +1,127 @@
-+import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
-+
-+const TextToSpeech = NativeModules.TextToSpeech;
-+
-+class Tts extends NativeEventEmitter {
-+  constructor() {
-+    super(TextToSpeech);
-+  }
-+
-+  getInitStatus() {
-+    if (Platform.OS === 'ios' || Platform.OS === 'windows') {
-+      return Promise.resolve(true);
-+    }
-+    return TextToSpeech.getInitStatus();
-+  }
-+
-+  requestInstallEngine() {
-+    if (Platform.OS === 'ios' || Platform.OS === 'windows') {
-+      return Promise.resolve(true);
-+    }
-+    return TextToSpeech.requestInstallEngine();
-+  }
-+
-+  requestInstallData() {
-+    if (Platform.OS === 'ios' || Platform.OS === 'windows') {
-+      return Promise.resolve(true);
-+    }
-+    return TextToSpeech.requestInstallData();
-+  }
-+
-+  setDucking(enabled) {
-+    if (Platform.OS === 'windows') {
-+      return Promise.resolve(true);
-+    }
-+    return TextToSpeech.setDucking(enabled);
-+  }
-+
-+  setDefaultEngine(engineName) {
-+    if (Platform.OS === 'ios' || Platform.OS === 'windows') {
-+      return Promise.resolve(true);
-+    }
-+    return TextToSpeech.setDefaultEngine(engineName);
-+  }
-+
-+  setDefaultVoice(voiceId) {
-+    return TextToSpeech.setDefaultVoice(voiceId);
-+  }
-+
-+  setDefaultRate(rate, skipTransform) {
-+    return TextToSpeech.setDefaultRate(rate, !!skipTransform);
-+  }
-+
-+  setDefaultPitch(pitch) {
-+    return TextToSpeech.setDefaultPitch(pitch);
-+  }
-+
-+  setDefaultLanguage(language) {
-+    return TextToSpeech.setDefaultLanguage(language);
-+  }
-+
-+  setIgnoreSilentSwitch(ignoreSilentSwitch) {
-+    if (Platform.OS === 'ios' || Platform.OS === 'windows') {
-+      return TextToSpeech.setIgnoreSilentSwitch(ignoreSilentSwitch);
-+    }
-+    return Promise.resolve(true);
-+  }
-+
-+  voices() {
-+    return TextToSpeech.voices();
-+  }
-+
-+  engines() {
-+    if (Platform.OS === 'ios' || Platform.OS === 'windows') {
-+      return Promise.resolve([]);
-+    }
-+    return TextToSpeech.engines();
-+  }
-+
-+  speak(utterance, options = {}) {
-+    // compatibility with old-style voiceId argument passing
-+    if (typeof options === 'string') {
-+      if (Platform.OS === 'ios') {
-+        return TextToSpeech.speak(utterance, { iosVoiceId: options });
-+      } else {
-+        return TextToSpeech.speak(utterance, {});
-+      }
-+    } else {
-+      if (Platform.OS === 'ios' || Platform.OS === 'windows') {
-+        return TextToSpeech.speak(utterance, options);
-+      } else {
-+        return TextToSpeech.speak(utterance, options.androidParams || {});
-+      }
-+    }
-+  }
-+
-+  stop(onWordBoundary) {
-+    if (Platform.OS === 'ios') {
-+      return TextToSpeech.stop(onWordBoundary);
-+    } else {
-+      return TextToSpeech.stop();
-+    }
-+  }
-+
-+  pause(onWordBoundary) {
-+    if (Platform.OS === 'ios') {
-+      return TextToSpeech.pause(onWordBoundary);
-+    }
-+    return Promise.resolve(false);
-+  }
-+
-+  resume() {
-+    if (Platform.OS === 'ios') {
-+      return TextToSpeech.resume();
-+    }
-+    return Promise.resolve(false);
-+  }
-+
-+  addEventListener(type, handler) {
-+    return this.addListener(type, handler);
-+  }
-+
-+  removeEventListener(type, handler) {
-+    this.removeListener(type, handler);
-+  }
-+}
-+
-+export default new Tts();
+-RCT_EXPORT_METHOD(stop:(BOOL *)onWordBoundary resolve:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPromiseRejectBlock)reject)
++RCT_EXPORT_METHOD(stop:(BOOL)onWordBoundary resolve:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPromiseRejectBlock)reject)
+ {
+-    AVSpeechBoundary boundary;
+-
+-    if(onWordBoundary != NULL && onWordBoundary) {
+-        boundary = AVSpeechBoundaryWord;
+-    } else {
+-        boundary = AVSpeechBoundaryImmediate;
+-    }
+-
++    AVSpeechBoundary boundary = onWordBoundary ? AVSpeechBoundaryWord : AVSpeechBoundaryImmediate;
+     BOOL stopped = [self.synthesizer stopSpeakingAtBoundary:boundary];
+ 
+     resolve([NSNumber numberWithBool:stopped]);
+ }
+ 
+-RCT_EXPORT_METHOD(pause:(BOOL *)onWordBoundary resolve:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPromiseRejectBlock)reject)
++RCT_EXPORT_METHOD(pause:(BOOL)onWordBoundary resolve:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPromiseRejectBlock)reject)
+ {
+-    AVSpeechBoundary boundary;
+-
+-    if(onWordBoundary != NULL && onWordBoundary) {
+-        boundary = AVSpeechBoundaryWord;
+-    } else {
+-        boundary = AVSpeechBoundaryImmediate;
+-    }
+-
++    AVSpeechBoundary boundary = onWordBoundary ? AVSpeechBoundaryWord : AVSpeechBoundaryImmediate;
+     BOOL paused = [self.synthesizer pauseSpeakingAtBoundary:boundary];
+ 
+     resolve([NSNumber numberWithBool:paused]);
+@@ -132,7 +118,7 @@ RCT_EXPORT_METHOD(resume:(RCTPromiseResolveBlock)resolve reject:(__unused RCTPro
+ }
+ 
+ 
+-RCT_EXPORT_METHOD(setDucking:(BOOL *)ducking
++RCT_EXPORT_METHOD(setDucking:(BOOL)ducking
+                   resolve:(RCTPromiseResolveBlock)resolve
+                   reject:(__unused RCTPromiseRejectBlock)reject)
+ {
+@@ -178,7 +164,7 @@ RCT_EXPORT_METHOD(setDefaultVoice:(NSString *)identifier
+ }
+ 
+ RCT_EXPORT_METHOD(setDefaultRate:(float)rate
+-                  skipTransform:(BOOL *)skipTransform // not used, compatibility with Android native module signature
++                  skipTransform:(BOOL)skipTransform // not used, compatibility with Android native module signature
+                   resolve:(RCTPromiseResolveBlock)resolve
+                   reject:(RCTPromiseRejectBlock)reject)
+ {

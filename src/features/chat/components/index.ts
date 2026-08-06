@@ -1,5 +1,7 @@
 export { ComposerBar } from './ComposerBar';
 export type { ComposerBarProps } from './ComposerBar';
+export { LiquidGlassButton, AmbientAiPattern } from './LiquidGlassButton';
+export type { LiquidGlassButtonProps } from './LiquidGlassButton';
 export { SideDrawer } from './SideDrawer';
 export type { SideDrawerProps } from './SideDrawer';
 export { ChatModals } from './ChatModals';

@@ -6,6 +6,8 @@ import {
   requestMicrophonePermission,
   hasMicrophonePermission,
 } from './src/platform/permissions';
+import { LISTENING_POLICY, type ListenStartPriority } from './src/shared/speech/listeningPolicy';
+import { pickBestHypothesis } from './src/shared/speech/mergeTranscript';
 
 // ============================================
 // GLOBAL TYPE DECLARATIONS
@@ -288,11 +290,32 @@ class VoiceCleanupService {
     });
   }
 
+  /** Fast path before first / next start — no destroy storm */
+  static async prepareForStart(): Promise<void> {
+    try {
+      const recognizing = await Voice.isRecognizing();
+      if (recognizing) {
+        try {
+          await Voice.stop();
+        } catch {
+          // ignore
+        }
+        await this.delay(LISTENING_POLICY.softStopDelayMs);
+      }
+    } catch (error) {
+      log.warning('Voice', 'prepareForStart check failed (continuing)', error);
+    }
+  }
+
   static async softCleanup(): Promise<void> {
     try {
       log.info('Voice', 'Soft cleanup...');
-      await Voice.stop();
-      await this.delay(300);
+      try {
+        await Voice.stop();
+      } catch {
+        // ignore if not running
+      }
+      await this.delay(LISTENING_POLICY.softStopDelayMs);
       Voice.removeAllListeners();
     } catch (error) {
       log.error('Voice', 'Soft cleanup error', error);
@@ -393,16 +416,24 @@ class VoicePermissionService {
 // ============================================
 
 class VoiceEventService {
+  private static endGraceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  static clearPendingEnd(): void {
+    if (this.endGraceTimer) {
+      clearTimeout(this.endGraceTimer);
+      this.endGraceTimer = null;
+    }
+  }
+
   static setup(stateManager: VoiceStateManager): void {
     log.info('Voice', 'Setting up event handlers...');
     
-    // Clean slate - remove old listeners
+    this.clearPendingEnd();
     Voice.removeAllListeners();
     
     Voice.onSpeechStart = () => {
       log.info('Voice', 'Speech started - mic is active');
       stateManager.setListening(true);
-      // Reset error count on successful start
       stateManager.resetAudioFormatErrorCount();
     };
 
@@ -410,52 +441,48 @@ class VoiceEventService {
       log.info('Voice', 'Speech recognized - got audio input');
     };
 
-    Voice.onSpeechResults = (event: SpeechResultsEvent) => {
+    const emitBest = (event: SpeechResultsEvent, label: string) => {
       const callbacks = stateManager.getState().callbacks;
-      if (event.value && event.value.length > 0 && callbacks?.onResult) {
-        const result = event.value[0];
-        log.info('Voice', `Final result: "${result}"`);
-        callbacks.onResult(result);
-      }
+      const best = pickBestHypothesis(event.value);
+      if (!best || !callbacks?.onResult) return;
+      log.info('Voice', `${label}: "${best}"`);
+      callbacks.onResult(best);
+    };
+
+    Voice.onSpeechResults = (event: SpeechResultsEvent) => {
+      emitBest(event, 'Final');
     };
 
     Voice.onSpeechPartialResults = (event: SpeechResultsEvent) => {
-      const callbacks = stateManager.getState().callbacks;
-      if (event.value && event.value.length > 0 && callbacks?.onResult) {
-        const partial = event.value[0];
-        log.info('Voice', `Partial: "${partial}"`);
-        callbacks.onResult(partial);
-      }
+      emitBest(event, 'Partial');
     };
 
     Voice.onSpeechError = async (event: SpeechErrorEvent) => {
       log.warning('Voice', 'Speech error', event?.error);
+      this.clearPendingEnd();
       
       const callbacks = stateManager.getState().callbacks;
 
-      // Check if it's a "No speech detected" graceful shutdown
       if (VoiceErrorHandler.isNoSpeechDetected(event?.error)) {
         log.info('Voice', 'No speech detected - graceful shutdown');
         stateManager.setListening(false);
-        if (callbacks?.onEnd) {
-          callbacks.onEnd();
-        }
+        // Grace so a late final result can still land
+        this.endGraceTimer = setTimeout(() => {
+          this.endGraceTimer = null;
+          callbacks?.onEnd?.();
+        }, LISTENING_POLICY.endGraceMs);
         return;
       }
 
       const errorType = VoiceErrorHandler.categorizeError(event);
-      
-      // Handle error based on type - returns false if unrecoverable
       const canRecover = await VoiceErrorHandler.handleError(errorType, stateManager);
       
-      // Call user's error callback
       if (callbacks?.onError) {
         const errorCallback = callbacks.onError;
         stateManager.setCallbacks(null);
         errorCallback();
       }
       
-      // Show user message if unrecoverable
       if (!canRecover && errorType === VoiceErrorType.AUDIO_FORMAT) {
         Alert.alert(
           'Microphone Issue',
@@ -466,13 +493,14 @@ class VoiceEventService {
     };
 
     Voice.onSpeechEnd = () => {
-      log.info('Voice', 'Speech ended');
+      log.info('Voice', 'Speech ended — waiting for final hypothesis');
       stateManager.setListening(false);
-      
-      const callbacks = stateManager.getState().callbacks;
-      if (callbacks?.onEnd) {
-        callbacks.onEnd();
-      }
+      this.clearPendingEnd();
+      this.endGraceTimer = setTimeout(() => {
+        this.endGraceTimer = null;
+        const callbacks = stateManager.getState().callbacks;
+        callbacks?.onEnd?.();
+      }, LISTENING_POLICY.endGraceMs);
     };
     
     log.info('Voice', 'Event handlers ready');
@@ -504,15 +532,14 @@ export async function initializeVoice(): Promise<boolean> {
   try {
     log.info('Voice', 'Initializing...');
     
-    // Request permissions
     const hasPermission = await VoicePermissionService.request();
     if (!hasPermission) {
       log.error('Voice', 'Permission denied');
       return false;
     }
 
-    // Aggressive cleanup before init
-    await VoiceCleanupService.aggressiveReset(500);
+    // Light prep only — aggressive destroy is reserved for audio-format recovery
+    await VoiceCleanupService.prepareForStart();
     
     stateManager.setInitialized(true);
     log.info('Voice', 'Initialized');
@@ -530,6 +557,36 @@ export async function isVoiceAvailable(): Promise<boolean> {
   return VoicePermissionService.check();
 }
 
+export interface StartListeningOptions {
+  /** Skip availability round-trip + heavy prepare (post-TTS conversation turn) */
+  priority?: ListenStartPriority;
+}
+
+/** Cached after first successful availability check — hot path must not wait on it. */
+let voiceAvailableCache: boolean | null = null;
+
+/**
+ * Warm the voice stack while TTS is speaking so Voice.start is near-instant
+ * when the assistant finishes (prevents missing the user's first words).
+ */
+export async function primeVoiceSession(): Promise<void> {
+  try {
+    const state = stateManager.getState();
+    if (!state.isInitialized) {
+      await initializeVoice();
+    }
+    VoiceEventService.clearPendingEnd();
+    // Ensure we are not still recognizing from a prior turn
+    await VoiceCleanupService.prepareForStart();
+    if (voiceAvailableCache === null) {
+      voiceAvailableCache = await isVoiceAvailable();
+    }
+    log.info('Voice', 'Primed for next listen turn');
+  } catch (error) {
+    log.warning('Voice', 'primeVoiceSession failed (non-fatal)', error);
+  }
+}
+
 /**
  * Start listening for speech
  * ALWAYS uses real voice recognition (even on simulator)
@@ -537,19 +594,16 @@ export async function isVoiceAvailable(): Promise<boolean> {
 export async function startListening(
   onResult: (text: string) => void,
   onError?: () => void,
-  onEnd?: () => void
+  onEnd?: () => void,
+  locale: string = 'en-US',
+  options: StartListeningOptions = {}
 ): Promise<void> {
   const state = stateManager.getState();
+  const fast = options.priority === 'fast';
 
-  // ============================================
-  // ALWAYS USE REAL VOICE RECOGNITION
-  // MockVoiceService removed - simulator will use real microphone
-  // ============================================
-  
   try {
-    log.info('Voice', '🎤 Starting REAL voice recognition...');
+    log.info('Voice', `🎤 Starting REAL voice recognition (${locale}, priority=${fast ? 'fast' : 'normal'})...`);
     
-    // Ensure initialized
     if (!state.isInitialized) {
       const initialized = await initializeVoice();
       if (!initialized) {
@@ -559,41 +613,53 @@ export async function startListening(
       }
     }
 
-    // If already listening, aggressive cleanup first
+    // Soft restart if already listening — keep session warm
     if (state.isListening) {
-      log.warning('Voice', 'Already listening - aggressive cleanup...');
-      await VoiceCleanupService.aggressiveReset(800);
+      log.warning('Voice', 'Already listening - soft restart...');
+      VoiceEventService.clearPendingEnd();
+      await VoiceCleanupService.softCleanup();
       stateManager.setListening(false);
-      stateManager.setInitialized(false);
-      
-      // Re-initialize
-      await initializeVoice();
+    } else if (!fast) {
+      await VoiceCleanupService.prepareForStart();
+    }
+    // fast path: priming already ran during TTS — skip extra prepare latency
+
+    if (!fast || voiceAvailableCache !== true) {
+      const available = await isVoiceAvailable();
+      voiceAvailableCache = available;
+      if (!available) {
+        log.error('Voice', 'Not available');
+        Alert.alert('Not Available', 'Speech recognition is not available.');
+        onError?.();
+        return;
+      }
     }
 
-    // Check availability
-    const available = await isVoiceAvailable();
-    if (!available) {
-      log.error('Voice', 'Not available');
-      Alert.alert('Not Available', 'Speech recognition is not available.');
-      onError?.();
-      return;
-    }
-
-    // Store callbacks
     stateManager.setCallbacks({ onResult, onError, onEnd });
-    
-    // Setup event handlers
     VoiceEventService.setup(stateManager);
 
-    // Start recognition
-    log.info('Voice', 'Starting recognition...');
-    await Voice.start('en-US');
+    log.info('Voice', `Starting recognition with locale ${locale}...`);
+    if (Platform.OS === 'android') {
+      await Voice.start(locale, {
+        EXTRA_LANGUAGE_MODEL: 'LANGUAGE_MODEL_FREE_FORM',
+        EXTRA_MAX_RESULTS: 5,
+        EXTRA_PARTIAL_RESULTS: true,
+        EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
+        EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 1500,
+        EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 800,
+      });
+    } else {
+      await Voice.start(locale);
+    }
     stateManager.setListening(true);
+    voiceAvailableCache = true;
     log.info('Voice', '✅ Real voice recognition started - speak now!');
 
   } catch (error) {
     log.error('Voice', 'Failed to start', error);
     stateManager.setListening(false);
+    // Invalidate cache so next attempt re-checks
+    voiceAvailableCache = null;
     
     const errorType = VoiceErrorHandler.categorizeError(error);
     await VoiceErrorHandler.handleError(errorType, stateManager);
@@ -610,11 +676,13 @@ export async function stopListening(): Promise<void> {
   
   if (!state.isListening) {
     log.info('Voice', 'Not listening, skipping stop');
+    VoiceEventService.clearPendingEnd();
     return;
   }
 
   try {
     log.info('Voice', 'Stopping...');
+    VoiceEventService.clearPendingEnd();
     await VoiceCleanupService.softCleanup();
     stateManager.setListening(false);
     stateManager.setCallbacks(null);
@@ -632,6 +700,7 @@ export async function stopListening(): Promise<void> {
 export async function cancelListening(): Promise<void> {
   try {
     log.info('Voice', 'Cancelling...');
+    VoiceEventService.clearPendingEnd();
     await VoiceCleanupService.cancel();
     stateManager.setListening(false);
     stateManager.setCallbacks(null);
@@ -649,6 +718,7 @@ export async function cancelListening(): Promise<void> {
 export async function destroyVoice(): Promise<void> {
   try {
     log.info('Voice', 'Destroying...');
+    VoiceEventService.clearPendingEnd();
     await VoiceCleanupService.aggressiveReset(500);
     stateManager.reset();
     log.info('Voice', 'Destroyed');

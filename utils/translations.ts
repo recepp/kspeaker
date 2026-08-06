@@ -7,7 +7,13 @@ export type TranslationKey =
   | 'faq'
   | 'support'
   | 'language'
-  | 'addVoucher'
+  | 'deviceInformation'
+  | 'deviceId'
+  | 'deviceIdHint'
+  | 'copyDeviceId'
+  | 'deviceIdCopied'
+  | 'platform'
+  | 'appVersion'
   | 'login'
   | 'askKspeaker'
   | 'startConversation'
@@ -57,7 +63,48 @@ const translations: Record<TranslationKey, Record<Language, string>> = {
   faq: { en: 'FAQ', tr: 'Sık Sorulan Sorular', ar: 'الأسئلة الشائعة', ru: 'Часто задаваемые вопросы' },
   support: { en: 'Support', tr: 'Destek', ar: 'الدعم', ru: 'Поддержка' },
   language: { en: 'Language', tr: 'Dil', ar: 'اللغة', ru: 'Язык' },
-  addVoucher: { en: 'Add Voucher', tr: 'Kupon Ekle', ar: 'إضافة قسيمة', ru: 'Добавить ваучер' },
+  deviceInformation: {
+    en: 'Device Information',
+    tr: 'Cihaz Bilgisi',
+    ar: 'معلومات الجهاز',
+    ru: 'Информация об устройстве',
+  },
+  deviceId: {
+    en: 'Device ID',
+    tr: 'Cihaz Kimliği',
+    ar: 'معرف الجهاز',
+    ru: 'ID устройства',
+  },
+  deviceIdHint: {
+    en: 'Share this ID with support when reporting an issue.',
+    tr: 'Sorun bildirirken bu kimliği destek ekibiyle paylaşın.',
+    ar: 'شارك هذا المعرف مع الدعم عند الإبلاغ عن مشكلة.',
+    ru: 'Сообщите этот ID поддержке при обращении.',
+  },
+  copyDeviceId: {
+    en: 'Copy to Clipboard',
+    tr: 'Panoya Kopyala',
+    ar: 'نسخ إلى الحافظة',
+    ru: 'Копировать',
+  },
+  deviceIdCopied: {
+    en: 'Device ID copied',
+    tr: 'Cihaz kimliği kopyalandı',
+    ar: 'تم نسخ معرف الجهاز',
+    ru: 'ID устройства скопирован',
+  },
+  platform: {
+    en: 'Platform',
+    tr: 'Platform',
+    ar: 'المنصة',
+    ru: 'Платформа',
+  },
+  appVersion: {
+    en: 'App Version',
+    tr: 'Uygulama Sürümü',
+    ar: 'إصدار التطبيق',
+    ru: 'Версия приложения',
+  },
   login: { en: 'Login', tr: 'Giriş Yap', ar: 'تسجيل الدخول', ru: 'Войти' },
   askKspeaker: {
     en: 'Ask Kspeaker...',

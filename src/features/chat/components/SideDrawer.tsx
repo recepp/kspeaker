@@ -25,7 +25,7 @@ export interface SideDrawerProps {
   onOpenSupport: () => void;
   onOpenLanguage: () => void;
   onToggleTheme: () => void;
-  onOpenVoucher: () => void;
+  onOpenDeviceInfo: () => void;
   onOpenFlashCards: () => void;
   onOpenDeleteAccount: () => void;
 }
@@ -43,7 +43,7 @@ export function SideDrawer({
   onOpenSupport,
   onOpenLanguage,
   onToggleTheme,
-  onOpenVoucher,
+  onOpenDeviceInfo,
   onOpenFlashCards,
   onOpenDeleteAccount,
 }: SideDrawerProps) {
@@ -132,14 +132,14 @@ export function SideDrawer({
           <View style={styles.drawerDivider} />
 
           <DrawerItem
-            icon="ticket-outline"
-            label={t('addVoucher')}
-            color={isDark ? '#F59E0B' : '#D97706'}
+            icon="phone-portrait-outline"
+            label={t('deviceInformation')}
+            color={isDark ? '#7DD3C0' : '#4A9B8F'}
             light={!isDark}
             accent
             onPress={() => {
               triggerHaptic('medium');
-              onOpenVoucher();
+              onOpenDeviceInfo();
             }}
           />
           <DrawerItem

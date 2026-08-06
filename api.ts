@@ -3,6 +3,12 @@ import { Platform } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 import { checkNetworkConnection, isNetworkError, retryWithExponentialBackoff } from './networkUtils';
 import { logError, logInfo, logWarning } from './logger';
+import { toResponseLanguage } from './src/shared/language/appLanguageConfig';
+import {
+  getApiLanguageBody,
+  getApiLanguageHeaders,
+} from './src/shared/language/replyLanguageLock';
+import { composeOutboundMessage } from './src/shared/chat/replyStyle';
 
 import { config } from './config';
 
@@ -32,9 +38,10 @@ export const initializeApi = async () => {
 };
 
 // Get headers with device ID, platform, and version information
-const getHeaders = (conversationMode?: string) => {
+const getHeaders = (conversationMode?: string, responseLanguage: string = 'en') => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...getApiLanguageHeaders(responseLanguage),
     'X-Platform': apiState.platform,
     'X-Platform-Version': apiState.systemVersion,
     'X-App-Version': `${apiState.appVersion}+${apiState.buildNumber}`,
@@ -157,7 +164,15 @@ export async function createVoucher(expiresAt: string): Promise<string | null> {
 }
 
 // Simple API request function for chat
-export async function sendChatMessage(text: string, conversationMode?: string): Promise<string> {
+/**
+ * Send chat text to /generate.
+ * Reply language follows the screen (UI) language — same locale as STT/TTS.
+ */
+export async function sendChatMessage(
+  text: string,
+  conversationMode?: string,
+  uiLanguage: string = 'en'
+): Promise<string> {
   // Initialize device ID if not already done
   if (!apiState.deviceId) {
     await initializeApi();
@@ -169,16 +184,22 @@ export async function sendChatMessage(text: string, conversationMode?: string): 
     throw new Error('NETWORK_ERROR: No internet connection');
   }
 
+  const responseLanguage = toResponseLanguage(uiLanguage);
+  const languageBody = getApiLanguageBody(responseLanguage);
+
   // Use retry logic with exponential backoff
   return retryWithExponentialBackoff(async () => {
     try {
       const response = await fetch(`${config.API_BASE_URL}/generate`, {
         method: 'POST',
-        headers: getHeaders(conversationMode),
-        body: JSON.stringify({ text }),
+        headers: getHeaders(conversationMode, responseLanguage),
+        body: JSON.stringify({
+          text: composeOutboundMessage(text, responseLanguage),
+          ...languageBody,
+        }),
       });
       
-      if (__DEV__) console.log('[API] Response status:', response.status);
+      if (__DEV__) console.log('[API] Response status:', response.status, 'lang:', responseLanguage, 'locale:', languageBody.locale);
       
       // Check for rate limit error (429)
       if (response.status === 429) {

@@ -1,4 +1,4 @@
-import React, { RefObject } from 'react';
+import React, { RefObject, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,10 +8,12 @@ import {
   Animated,
   Platform,
 } from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
 import { BlurView } from '@react-native-community/blur';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { triggerHaptic } from '../../../platform/haptic';
 import type { Theme, VoiceState } from '../types';
+import { LiquidGlassButton } from './LiquidGlassButton';
 
 export interface ComposerBarProps {
   theme: Theme;
@@ -24,6 +26,7 @@ export interface ComposerBarProps {
   onOpenModes: () => void;
   onInputFocus: () => void;
   voiceState: VoiceState;
+  liveTranscript: string;
   messageCount: number;
   inputRef: RefObject<TextInput | null>;
   micPulseAnim: Animated.Value;
@@ -34,7 +37,8 @@ export interface ComposerBarProps {
 }
 
 /**
- * Shared chat composer — iOS visual parity on Android (BlurView + voice indicator).
+ * Tahoe-style frosted liquid glass composer.
+ * Highly translucent so chat bubbles blur through behind the bar.
  */
 export function ComposerBar({
   theme,
@@ -47,6 +51,7 @@ export function ComposerBar({
   onOpenModes,
   onInputFocus,
   voiceState,
+  liveTranscript,
   messageCount,
   inputRef,
   micPulseAnim,
@@ -57,6 +62,42 @@ export function ComposerBar({
 }: ComposerBarProps) {
   const isDark = theme === 'dark';
   const hasInput = !!input.trim();
+  const accentIcon = isDark ? '#E8F7F3' : '#1A1A1F';
+  const plusColor = isDark ? 'rgba(255, 255, 255, 0.9)' : 'rgba(26, 26, 31, 0.88)';
+
+  const sendOpacity = useRef(new Animated.Value(hasInput ? 1 : 0)).current;
+  const sendScale = useRef(new Animated.Value(hasInput ? 1 : 0.86)).current;
+  const idleOpacity = useRef(new Animated.Value(hasInput ? 0 : 1)).current;
+  const idleScale = useRef(new Animated.Value(hasInput ? 0.86 : 1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(sendOpacity, {
+        toValue: hasInput ? 1 : 0,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 80,
+      }),
+      Animated.spring(sendScale, {
+        toValue: hasInput ? 1 : 0.86,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 80,
+      }),
+      Animated.spring(idleOpacity, {
+        toValue: hasInput ? 0 : 1,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 80,
+      }),
+      Animated.spring(idleScale, {
+        toValue: hasInput ? 0.86 : 1,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 80,
+      }),
+    ]).start();
+  }, [hasInput, sendOpacity, sendScale, idleOpacity, idleScale]);
 
   const voiceStatusLabel =
     voiceState === 'listening'
@@ -79,9 +120,7 @@ export function ComposerBar({
         ? '#F59E0B'
         : voiceState === 'speaking'
           ? '#3B82F6'
-          : isDark
-            ? '#7DD3C0'
-            : '#4A6FA5';
+          : accentIcon;
 
   const micIconName =
     voiceState === 'idle'
@@ -92,285 +131,450 @@ export function ComposerBar({
           ? 'cloud-upload'
           : 'volume-high';
 
-  const content = (
-    <>
-      <View style={[styles.inputRow, !isDark && styles.inputRowLight]}>
-        <TouchableOpacity
-          style={styles.plusButton}
-          onPress={() => {
-            triggerHaptic('light');
-            onOpenModes();
-          }}
-        >
-          <Ionicons name="add-circle" size={28} color="#4A6FA5" />
-        </TouchableOpacity>
+  const blurType =
+    Platform.OS === 'ios'
+      ? isDark
+        ? 'ultraThinMaterialDark'
+        : 'ultraThinMaterialLight'
+      : isDark
+        ? 'dark'
+        : 'light';
 
-        <TextInput
-          ref={inputRef}
-          style={[styles.input, !isDark && styles.inputLight]}
-          value={input}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor={
-            isDark ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'
+  return (
+    <View style={styles.barWrap}>
+      <View style={[styles.barSurface, { borderRadius: 28 }]}>
+        {/* Frosted glass — chat content behind should show through */}
+        <BlurView
+          style={StyleSheet.absoluteFill}
+          blurType={blurType}
+          blurAmount={Platform.OS === 'android' ? 28 : 40}
+          reducedTransparencyFallbackColor={
+            isDark ? 'rgba(20, 22, 28, 0.72)' : 'rgba(255, 255, 255, 0.72)'
           }
-          onSubmitEditing={onSend}
-          returnKeyType="send"
-          multiline
-          onFocus={onInputFocus}
+        />
+        {/* Ultra-light tint so blur remains visible */}
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: isDark
+                ? 'rgba(255,255,255,0.06)'
+                : 'rgba(255,255,255,0.22)',
+            },
+          ]}
+        />
+        <LinearGradient
+          pointerEvents="none"
+          colors={
+            isDark
+              ? ['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.04)', 'rgba(0,0,0,0.14)']
+              : ['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.18)', 'rgba(0,0,0,0.04)']
+          }
+          locations={[0, 0.42, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+        {/* Specular crown */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={['rgba(255,255,255,0.38)', 'rgba(255,255,255,0.06)', 'transparent']}
+          locations={[0, 0.4, 1]}
+          start={{ x: 0.15, y: 0 }}
+          end={{ x: 0.85, y: 0.7 }}
+          style={styles.barSpecular}
+        />
+        {/* Bevel highlights */}
+        <View
+          pointerEvents="none"
+          style={[
+            styles.bevelLight,
+            {
+              borderColor: isDark
+                ? 'rgba(255,255,255,0.42)'
+                : 'rgba(255,255,255,0.9)',
+            },
+          ]}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            styles.bevelDark,
+            {
+              borderColor: isDark
+                ? 'rgba(0,0,0,0.28)'
+                : 'rgba(0,0,0,0.08)',
+            },
+          ]}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            styles.barRim,
+            {
+              borderColor: isDark
+                ? 'rgba(255,255,255,0.32)'
+                : 'rgba(255,255,255,0.75)',
+            },
+          ]}
         />
 
-        {hasInput ? (
-          <TouchableOpacity style={styles.sendButton} onPress={onSend}>
-            <Ionicons name="send" size={24} color="#7DD3C0" />
+        <View style={styles.inputRow}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Open modes"
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+            activeOpacity={0.65}
+            onPress={() => {
+              triggerHaptic('light');
+              onOpenModes();
+            }}
+            style={styles.plusHit}
+          >
+            <Ionicons name="add" size={28} color={plusColor} />
           </TouchableOpacity>
-        ) : (
-          <>
-            {messageCount > 0 && voiceState === 'idle' && (
-              <TouchableOpacity style={styles.clearButton} onPress={onClear}>
-                <Ionicons name="trash-outline" size={24} color="#EF4444" />
-              </TouchableOpacity>
-            )}
 
-            {voiceState !== 'idle' && (
-              <TouchableOpacity style={styles.stopButton} onPress={onStopVoice}>
-                <Ionicons name="stop-circle" size={32} color="#EF4444" />
-              </TouchableOpacity>
+          <View style={styles.inputWrap}>
+            {!hasInput && (
+              <Text
+                pointerEvents="none"
+                numberOfLines={1}
+                style={styles.animatedPlaceholder}
+              >
+                {placeholder}
+              </Text>
             )}
+            <TextInput
+              ref={inputRef}
+              style={[styles.input, !isDark && styles.inputLight]}
+              value={input}
+              onChangeText={onChangeText}
+              placeholder=""
+              onSubmitEditing={onSend}
+              returnKeyType="send"
+              multiline
+              onFocus={onInputFocus}
+            />
+          </View>
 
-            <TouchableOpacity
+          <View style={styles.trailingSlot}>
+            <Animated.View
+              pointerEvents={hasInput ? 'auto' : 'none'}
               style={[
-                styles.micButton,
-                voiceState === 'speaking' && styles.micButtonActive,
-                voiceState !== 'idle' && styles.micButtonConversation,
-                !isDark && styles.micButtonLight,
+                styles.trailingLayer,
+                {
+                  opacity: sendOpacity,
+                  transform: [{ scale: sendScale }],
+                },
               ]}
-              onPress={onMicPress}
             >
-              <Ionicons name={micIconName} size={28} color={micIconColor} />
-            </TouchableOpacity>
-          </>
+              <LiquidGlassButton
+                theme={theme}
+                size="md"
+                accessibilityLabel="Send message"
+                onPress={() => {
+                  triggerHaptic('medium');
+                  onSend();
+                }}
+              >
+                <Ionicons name="send" size={18} color={accentIcon} />
+              </LiquidGlassButton>
+            </Animated.View>
+
+            <Animated.View
+              pointerEvents={hasInput ? 'none' : 'auto'}
+              style={[
+                styles.trailingLayer,
+                styles.idleRow,
+                {
+                  opacity: idleOpacity,
+                  transform: [{ scale: idleScale }],
+                },
+              ]}
+            >
+              {messageCount > 0 && voiceState === 'idle' && (
+                <TouchableOpacity style={styles.clearButton} onPress={onClear}>
+                  <Ionicons name="trash-outline" size={22} color="#EF4444" />
+                </TouchableOpacity>
+              )}
+
+              {voiceState !== 'idle' && (
+                <TouchableOpacity style={styles.stopButton} onPress={onStopVoice}>
+                  <Ionicons name="stop-circle" size={30} color="#EF4444" />
+                </TouchableOpacity>
+              )}
+
+              <View style={styles.micWrap}>
+                {voiceState === 'listening' && (
+                  <>
+                    <Animated.View
+                      pointerEvents="none"
+                      style={[
+                        styles.micRing,
+                        {
+                          transform: [{ scale: micPulseAnim }],
+                          opacity: micPulseAnim.interpolate({
+                            inputRange: [1, 1.6],
+                            outputRange: [0.55, 0],
+                          }),
+                        },
+                      ]}
+                    />
+                    <Animated.View
+                      pointerEvents="none"
+                      style={[
+                        styles.micRingInner,
+                        {
+                          transform: [
+                            {
+                              scale: micPulseAnim.interpolate({
+                                inputRange: [1, 1.6],
+                                outputRange: [1, 1.35],
+                              }),
+                            },
+                          ],
+                          opacity: micPulseAnim.interpolate({
+                            inputRange: [1, 1.6],
+                            outputRange: [0.7, 0.15],
+                          }),
+                        },
+                      ]}
+                    />
+                  </>
+                )}
+                <LiquidGlassButton
+                  theme={theme}
+                  size="md"
+                  accessibilityLabel="Voice"
+                  onPress={onMicPress}
+                >
+                  <Ionicons name={micIconName} size={24} color={micIconColor} />
+                </LiquidGlassButton>
+              </View>
+            </Animated.View>
+          </View>
+        </View>
+
+        {voiceState === 'listening' && (
+          <View style={styles.liveTranscriptBar}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveTranscriptText} numberOfLines={3}>
+              {liveTranscript.trim()
+                ? `"${liveTranscript.trim()}"`
+                : '"…"'}
+            </Text>
+          </View>
+        )}
+
+        {(voiceState === 'processing' || voiceState === 'speaking') && (
+          <View style={styles.conversationModeIndicator}>
+            <View
+              style={[
+                styles.conversationModeDot,
+                voiceState === 'processing'
+                  ? styles.conversationModeDotProcessing
+                  : styles.conversationModeDotSpeaking,
+              ]}
+            />
+            <Text style={styles.conversationModeText}>{voiceStatusLabel}</Text>
+            <Text style={styles.conversationModeHint}>{voiceHint}</Text>
+          </View>
         )}
       </View>
-
-      {voiceState !== 'idle' && (
-        <View style={styles.conversationModeIndicator}>
-          <View style={styles.conversationModeDot} />
-          <Text style={styles.conversationModeText}>{voiceStatusLabel}</Text>
-          <Text style={styles.conversationModeHint}>{voiceHint}</Text>
-        </View>
-      )}
-
-      {voiceState === 'listening' && (
-        <>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.micPulse,
-              {
-                transform: [{ scale: micPulseAnim }],
-                opacity: micPulseAnim.interpolate({
-                  inputRange: [1, 1.8],
-                  outputRange: [0.4, 0],
-                }),
-                backgroundColor: '#10B981',
-              },
-            ]}
-          />
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.micPulse,
-              {
-                transform: [
-                  {
-                    scale: micPulseAnim.interpolate({
-                      inputRange: [1, 1.8],
-                      outputRange: [1, 1.5],
-                    }),
-                  },
-                ],
-                opacity: micPulseAnim.interpolate({
-                  inputRange: [1, 1.8],
-                  outputRange: [0.5, 0.1],
-                }),
-                backgroundColor: '#10B981',
-              },
-            ]}
-          />
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.micPulse,
-              {
-                transform: [
-                  {
-                    scale: micPulseAnim.interpolate({
-                      inputRange: [1, 1.8],
-                      outputRange: [1, 1.2],
-                    }),
-                  },
-                ],
-                opacity: micPulseAnim.interpolate({
-                  inputRange: [1, 1.8],
-                  outputRange: [0.7, 0.3],
-                }),
-                backgroundColor: '#34D399',
-              },
-            ]}
-          />
-        </>
-      )}
-    </>
-  );
-
-  // BlurView works on both platforms; Android gets a solid fallback underlay for reliability.
-  return (
-    <View style={[styles.blur, !isDark && styles.blurLightUnderlay, isDark && styles.blurDarkUnderlay]}>
-      <BlurView
-        style={StyleSheet.absoluteFill}
-        blurType={isDark ? 'dark' : 'light'}
-        blurAmount={Platform.OS === 'android' ? 20 : 25}
-        reducedTransparencyFallbackColor={isDark ? '#2F2F2F' : '#FFFFFF'}
-      />
-      {content}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  blur: {
-    borderRadius: 24,
+  barWrap: {
+    borderRadius: 28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.28,
+    shadowRadius: 22,
+    elevation: 14,
+    // Transparent wrap so only the frosted pill blurs content
+    backgroundColor: 'transparent',
+  },
+  barSurface: {
+    borderRadius: 28,
     overflow: 'hidden',
+    backgroundColor: 'transparent',
   },
-  blurDarkUnderlay: {
-    backgroundColor: Platform.OS === 'android' ? 'rgba(47, 47, 47, 0.92)' : 'transparent',
-    borderWidth: Platform.OS === 'android' ? 1 : 0,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    elevation: Platform.OS === 'android' ? 8 : 0,
+  barSpecular: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '55%',
   },
-  blurLightUnderlay: {
-    backgroundColor: Platform.OS === 'android' ? 'rgba(255, 255, 255, 0.92)' : 'transparent',
-    borderWidth: Platform.OS === 'android' ? 1 : 0,
-    borderColor: '#E5E7EB',
-    elevation: Platform.OS === 'android' ? 8 : 0,
+  bevelLight: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 28,
+    borderTopWidth: StyleSheet.hairlineWidth * 2,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+  },
+  bevelDark: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 28,
+    borderBottomWidth: StyleSheet.hairlineWidth * 2,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: 0,
+    borderLeftWidth: 0,
+  },
+  barRim: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 28,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 6,
+    zIndex: 2,
   },
-  inputRowLight: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+  plusHit: {
+    width: 32,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  inputWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  animatedPlaceholder: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.92)',
+    paddingVertical: Platform.OS === 'ios' ? 8 : 6,
   },
   input: {
-    flex: 1,
+    flex: 0,
     fontSize: 16,
-    color: '#ECECEC',
+    color: '#F5F5F7',
     maxHeight: 100,
+    paddingVertical: Platform.OS === 'ios' ? 8 : 6,
   },
   inputLight: {
     color: '#1A1A1F',
-  },
-  plusButton: {
-    marginRight: 8,
-  },
-  sendButton: {
-    width: 44,
+  },  trailingSlot: {
+    width: 96,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#4A6FA5',
     justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  trailingLayer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  idleRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
   },
   clearButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#3E3E42',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#4A5568',
   },
   stopButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#3E3E42',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#EF4444',
   },
-  micButton: {
+  micWrap: {
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1C1C1E',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(125, 211, 192, 0.3)',
-    shadowColor: '#7DD3C0',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
   },
-  micButtonActive: {
-    backgroundColor: '#2A3D4A',
-    borderColor: '#4A7A8B',
-  },
-  micButtonConversation: {
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-    borderColor: '#06B6D4',
-    borderWidth: 2,
-  },
-  micButtonLight: {
-    backgroundColor: '#F3F4F6',
-    borderColor: '#D1D5DB',
-  },
-  micPulse: {
+  micRing: {
     position: 'absolute',
-    bottom: 12,
-    right: 16,
     width: 44,
     height: 44,
     borderRadius: 22,
+    borderWidth: 2,
+    borderColor: '#10B981',
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+  },
+  micRingInner: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderColor: 'rgba(52, 211, 153, 0.9)',
+  },
+  liveTranscriptBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#000000',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+    zIndex: 2,
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: '#10B981',
-    shadowColor: '#10B981',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 10,
-    elevation: 5,
+    marginTop: 6,
+  },
+  liveTranscriptText: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 22,
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontStyle: 'italic',
+    fontWeight: '500',
   },
   conversationModeIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(6, 182, 212, 0.3)',
+    backgroundColor: '#000000',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+    zIndex: 2,
   },
   conversationModeDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#06B6D4',
     marginRight: 8,
+  },
+  conversationModeDotProcessing: {
+    backgroundColor: '#F59E0B',
+  },
+  conversationModeDotSpeaking: {
+    backgroundColor: '#3B82F6',
   },
   conversationModeText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#06B6D4',
+    color: 'rgba(255, 255, 255, 0.92)',
     marginRight: 12,
   },
   conversationModeHint: {
     fontSize: 11,
-    color: 'rgba(6, 182, 212, 0.7)',
+    color: 'rgba(255, 255, 255, 0.55)',
   },
 });

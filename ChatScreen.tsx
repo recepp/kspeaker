@@ -4,7 +4,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native';
 import { sendChatMessage, initializeApi, registerUser } from './api';
 import { checkRegistration, saveRegistration } from './registration';
-import { startListening, stopListening } from './speech';
+import { startListening, stopListening, primeVoiceSession } from './speech';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Tts from 'react-native-tts';
 import LinearGradient from 'react-native-linear-gradient';
@@ -16,6 +16,9 @@ import { getTranslation as translate } from './utils/translations';
 import type { TranslationKey } from './utils/translations';
 import { triggerHaptic } from './src/platform/haptic';
 import { configureTtsEngine } from './src/platform/tts';
+import { getSpeechLocale } from './src/shared/language/appLanguageConfig';
+import { LISTENING_POLICY } from './src/shared/speech/listeningPolicy';
+import { mergeTranscript } from './src/shared/speech/mergeTranscript';
 import { useAppTheme, useAppLanguage, useNotificationSettings } from './src/features/chat/hooks';
 import type { ChatMessage, VoiceState } from './src/features/chat/types';
 
@@ -33,8 +36,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   
   // Voice Conversation State - ChatGPT Style (IDLE → LISTENING → SPEAKING)
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
-  const [voucherInput, setVoucherInput] = useState('');
-  const [voucherSubmitting, setVoucherSubmitting] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState('');
   const { theme, toggleTheme } = useAppTheme('dark');
   const { selectedLanguage, selectLanguage: persistLanguage } = useAppLanguage('en');
   const { notificationsEnabled, toggleNotifications } = useNotificationSettings(selectedLanguage);
@@ -53,7 +55,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [supportEmail, setSupportEmail] = useState('');
   const [supportMessage, setSupportMessage] = useState('');
-  const [showVoucherModal, setShowVoucherModal] = useState(false);
+  const [showDeviceInfoModal, setShowDeviceInfoModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>(''); // Backend error message
   const [quizMode, setQuizMode] = useState(false);
   const [quizLevel, setQuizLevel] = useState<string | null>(null);
@@ -80,10 +82,14 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   const drawerAnim = useRef(new Animated.Value(-280)).current;
   const shimmerAnim = useRef(new Animated.Value(0)).current;
   const micPulseAnim = useRef(new Animated.Value(1)).current;
+  /** Always-current screen language for voice/API closures (avoids stale 'en' after mount). */
+  const selectedLanguageRef = useRef(selectedLanguage);
+  const conversationModeRef = useRef(conversationModeType);
+  const startVoiceConversationRef = useRef<(isRetry?: boolean, priority?: 'normal' | 'fast') => void>(() => {});
 
   // Removed verbose state logging - only log on specific actions
 
-  // Sync voiceState ref with state for closures
+  // Sync voiceState / language / mode refs for long-lived listeners
   useEffect(() => {
     voiceStateRef.current = voiceState;
     if (__DEV__) {
@@ -91,6 +97,14 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       console.log('[UI] Stop button should be visible:', voiceState !== 'idle');
     }
   }, [voiceState]);
+
+  useEffect(() => {
+    selectedLanguageRef.current = selectedLanguage;
+  }, [selectedLanguage]);
+
+  useEffect(() => {
+    conversationModeRef.current = conversationModeType;
+  }, [conversationModeType]);
 
   // Keyboard event listeners
   useEffect(() => {
@@ -304,31 +318,31 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
             '5': 'You are a shop assistant at a clothing store. I am a customer looking for items. Start by greeting me and asking how you can help me today.',
           };
           
-          reply = await sendChatMessage(scenarioRoles[userInput], 'roleplay');
+          reply = await sendChatMessage(scenarioRoles[userInput], 'roleplay', selectedLanguageRef.current);
         } else {
           reply = 'Please type a number between 1-5 to select a roleplay scenario.';
         }
       } else if (roleplayMode && roleplayScenario) {
         // Roleplay in progress
-        reply = await sendChatMessage(userInput, 'roleplay');
+        reply = await sendChatMessage(userInput, 'roleplay', selectedLanguageRef.current);
       } else if (quizMode && !quizLevel) {
         // Quiz level selection
         if (userInput === '1' || userInput.toLowerCase().includes('beginner')) {
           setQuizLevel('beginner');
-          reply = await sendChatMessage('I want to take an English quiz at beginner level. Please give me 5 simple questions about basic English vocabulary and grammar. Number them 1-5.', conversationModeType || undefined);
+          reply = await sendChatMessage('I want to take an English quiz at beginner level. Please give me 5 simple questions about basic English vocabulary and grammar. Number them 1-5.', conversationModeRef.current || undefined, selectedLanguageRef.current);
         } else if (userInput === '2' || userInput.toLowerCase().includes('intermediate')) {
           setQuizLevel('intermediate');
-          reply = await sendChatMessage('I want to take an English quiz at intermediate level. Please give me 5 questions about English grammar, vocabulary and comprehension. Number them 1-5.', conversationModeType || undefined);
+          reply = await sendChatMessage('I want to take an English quiz at intermediate level. Please give me 5 questions about English grammar, vocabulary and comprehension. Number them 1-5.', conversationModeRef.current || undefined, selectedLanguageRef.current);
         } else if (userInput === '3' || userInput.toLowerCase().includes('advanced')) {
           setQuizLevel('advanced');
-          reply = await sendChatMessage('I want to take an English quiz at advanced level. Please give me 5 challenging questions about advanced English, idioms, and complex grammar. Number them 1-5.', conversationModeType || undefined);
+          reply = await sendChatMessage('I want to take an English quiz at advanced level. Please give me 5 challenging questions about advanced English, idioms, and complex grammar. Number them 1-5.', conversationModeRef.current || undefined, selectedLanguageRef.current);
         } else {
           reply = 'Please type 1 for Beginner, 2 for Intermediate, or 3 for Advanced.';
         }
       } else if (quizMode && quizLevel) {
         // Quiz in progress
         setQuizQuestionCount(prev => prev + 1);
-        reply = await sendChatMessage(userInput, conversationModeType || undefined);
+        reply = await sendChatMessage(userInput, conversationModeRef.current || undefined, selectedLanguageRef.current);
         
         if (quizQuestionCount >= 4) {
           // Quiz finished after 5 questions
@@ -338,7 +352,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         }
       } else {
         // Normal chat mode with conversation mode type
-        reply = await sendChatMessage(userInput, conversationModeType || undefined);
+        reply = await sendChatMessage(userInput, conversationModeRef.current || undefined, selectedLanguageRef.current);
       }
       
       const assistantMsg: ChatMessage = {
@@ -387,7 +401,11 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setIsLoadingResponse(true);
     
     try {
-      const reply = await sendChatMessage(voiceText.trim(), conversationModeType || undefined);
+      const reply = await sendChatMessage(
+        voiceText.trim(),
+        conversationModeRef.current || undefined,
+        selectedLanguageRef.current
+      );
       
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -398,12 +416,10 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       setMessages(prev => [...prev, assistantMsg]);
       setTypingMessageId(assistantMsg.id);
       
-      // Speak the reply
-      setTimeout(() => {
-        const processedText = preprocessTextForTTS(reply);
-        console.log('[TTS] 🔊 Speaking reply');
-        Tts.speak(processedText);
-      }, 200);
+      // Speak ASAP — no artificial lead-in (conversation turn-taking)
+      const processedText = preprocessTextForTTS(reply);
+      console.log('[TTS] 🔊 Speaking reply');
+      Tts.speak(processedText);
       
     } catch (e: any) {
       if (__DEV__) {
@@ -475,9 +491,9 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     setTimeout(() => setShowLanguageModal(true), 300);
   };
 
-  const openVoucherModal = () => {
+  const openDeviceInfoModal = () => {
     closeDrawer();
-    setTimeout(() => setShowVoucherModal(true), 300);
+    setTimeout(() => setShowDeviceInfoModal(true), 300);
   };
 
   const selectLanguage = async (lang: 'en' | 'tr' | 'ar' | 'ru') => {
@@ -512,53 +528,71 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
   // State machine: idle → listening → processing → speaking → listening (loop)
   // Single button: Tap to start/stop entire conversation
   
-  const startVoiceConversation = (isRetry = false) => {
-    if (__DEV__) console.log('[Voice] 🎙️ Starting conversation mode, isRetry:', isRetry);
+  const startVoiceConversation = (
+    isRetry = false,
+    priority: 'normal' | 'fast' = 'normal'
+  ) => {
+    if (__DEV__) console.log('[Voice] 🎙️ Starting conversation mode, isRetry:', isRetry, 'priority:', priority);
     console.log('[Voice] 📍 Before setVoiceState - current:', voiceState);
     setVoiceState('listening');
     voiceStateRef.current = 'listening';
     console.log('[Voice] 📍 After setVoiceState - should be listening');
     
-    // Only reset flags on fresh start, not on retry
+    // Only reset flags / transcript on fresh start, not on retry
     if (!isRetry) {
       userStoppedVoice.current = false;
       voiceRetryCount.current = 0;
+      currentVoiceText.current = '';
+      setLiveTranscript('');
     }
     
-    currentVoiceText.current = '';
     console.log('[Voice] 📍 About to call startListening from speech.ts');
     
-    let hasReceivedText = false;
+    let hasReceivedText = currentVoiceText.current.trim().length > 0;
+    let hasFinalized = false;
+
+    const finalizeAndSend = (source: string) => {
+      const text = currentVoiceText.current.trim();
+      if (hasFinalized) return;
+      if (!text || voiceStateRef.current !== 'listening') return;
+
+      hasFinalized = true;
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+        silenceTimer.current = null;
+      }
+      if (__DEV__) console.log('[Voice] ✅ Finalizing speech via', source, ':', text);
+      stopListening();
+      setLiveTranscript('');
+      setVoiceState('processing');
+      voiceStateRef.current = 'processing';
+      currentVoiceText.current = '';
+      sendVoiceMessage(text);
+    };
     
     const resetTimer = () => {
       if (silenceTimer.current) {
         clearTimeout(silenceTimer.current);
       }
       
-      // 2 second silence after we get text
-      const timeout = hasReceivedText ? 2000 : 6000;
+      const timeout = hasReceivedText
+        ? LISTENING_POLICY.silenceAfterSpeechMs
+        : LISTENING_POLICY.warmUpSilenceMs;
       
       silenceTimer.current = setTimeout(() => {
         const text = currentVoiceText.current.trim();
         
         if (text.length > 0 && voiceStateRef.current === 'listening') {
-          if (__DEV__) console.log('[Voice] ✅ Silence detected, processing:', text);
-          stopListening();
-          setVoiceState('processing');
-          voiceStateRef.current = 'processing';
-          sendVoiceMessage(text);
-          currentVoiceText.current = '';
+          finalizeAndSend('silence');
         } else {
           if (__DEV__) console.log('[Voice] ⏸️ Silence but no text, restarting...');
-          // Only restart if still NOT idle AND user hasn't manually stopped
           if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
             stopListening();
             setTimeout(() => {
-              // Double-check: only restart if STILL listening and not manually stopped
               if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
-                startVoiceConversation(true); // Pass true to indicate retry
+                startVoiceConversation(true, 'fast');
               }
-            }, 500);
+            }, LISTENING_POLICY.emptyRestartDelayMs);
           }
         }
       }, timeout);
@@ -566,11 +600,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     
     startListening(
       (text) => {
-        // On speech result (both partial and final)
-        console.log('[Voice] 📥 Got text:', text.substring(0, 50));
-        currentVoiceText.current = text;
+        const merged = mergeTranscript(currentVoiceText.current, text);
+        console.log('[Voice] 📥 Got text:', merged.substring(0, 50));
+        currentVoiceText.current = merged;
+        setLiveTranscript(merged);
         
-        if (!hasReceivedText && text.length > 0) {
+        if (!hasReceivedText && merged.length > 0) {
           hasReceivedText = true;
           console.log('[Voice] 🎬 First text received - user is speaking');
         }
@@ -578,7 +613,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         resetTimer();
       },
       () => {
-        // On error - don't try to JSON.stringify the error object, it crashes!
         console.log('[Voice] ❌ Speech recognition error occurred');
         console.log('[Voice] 📊 Voice state:', voiceStateRef.current);
         console.log('[Voice] 📊 Retry count:', voiceRetryCount.current);
@@ -588,7 +622,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           silenceTimer.current = null;
         }
         
-        // LIMIT RETRIES - max 2 attempts to prevent infinite loop
         voiceRetryCount.current++;
         if (voiceRetryCount.current >= 3) {
           console.log('[Voice] 🛑 Max retries reached (3), stopping voice mode');
@@ -596,45 +629,43 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           return;
         }
         
-        // Only retry if still in listening state AND user hasn't manually stopped
         setTimeout(() => {
           if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
             console.log('[Voice] 🔄 Retrying after error... (attempt', voiceRetryCount.current, '/3)');
-            startVoiceConversation(true); // Pass true to indicate retry
+            startVoiceConversation(true, 'normal');
           } else {
             console.log('[Voice] 🛑 Not retrying - user stopped or state changed');
           }
-        }, 1000);
-      }
+        }, LISTENING_POLICY.errorRetryDelayMs);
+      },
+      () => {
+        // Native speech ended — grace already applied in speech.ts
+        finalizeAndSend('onEnd');
+      },
+      getSpeechLocale(selectedLanguageRef.current),
+      { priority }
     );
     
-    console.log('[Voice] 🔄 Reset timer initialized');
+    console.log('[Voice] 🔄 Reset timer initialized; locale:', getSpeechLocale(selectedLanguageRef.current));
     resetTimer();
   };
+
+  startVoiceConversationRef.current = startVoiceConversation;
   
   const stopVoiceConversation = () => {
     console.log('[Voice] 🛑 Stopping conversation mode');
     
-    // Set manual stop flag to prevent any auto-restarts
     userStoppedVoice.current = true;
     
-    // Clear timer FIRST
     if (silenceTimer.current) {
       clearTimeout(silenceTimer.current);
       silenceTimer.current = null;
     }
     
-    // Stop listening
     stopListening();
-    
-    // Stop speaking
     Tts.stop();
-    
-    // Clear text
     currentVoiceText.current = '';
-    
-    // IMPORTANT: Set to idle LAST to ensure UI updates properly
-    // Update both state and ref
+    setLiveTranscript('');
     setVoiceState('idle');
     voiceStateRef.current = 'idle';
     
@@ -679,30 +710,37 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     initVoice();
   }, []);
 
-  // TTS Events - Integrated with voice conversation
+  // Keep TTS locale aligned with screen language (no event rebind cost)
   useEffect(() => {
-    console.log('[TTS] 🔧 Initializing TTS via shared platform adapter');
-    configureTtsEngine().catch((error) => {
+    console.log('[TTS] 🔧 Configuring TTS for language:', selectedLanguage);
+    configureTtsEngine(selectedLanguage).catch((error) => {
       console.error('[TTS] ❌ configureTtsEngine failed:', error);
     });
+  }, [selectedLanguage]);
 
+  // TTS Events - Integrated with voice conversation
+  // Listeners registered once; always call latest startVoiceConversation via ref
+  // so screen-language changes (TR/AR/RU) apply on every turn.
+  useEffect(() => {
     Tts.addEventListener('tts-start', () => {
       console.log('[TTS] 🔊 Started speaking');
       setVoiceState('speaking');
       voiceStateRef.current = 'speaking';
+      // Warm STT while AI talks so mic opens instantly on finish
+      primeVoiceSession().catch(() => {});
     });
     
     Tts.addEventListener('tts-finish', () => {
       console.log('[TTS] ✅ Finished speaking');
       
-      // Auto-restart listening only if still speaking AND user hasn't manually stopped
       if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
-        console.log('[Voice] 🔄 TTS finished, restarting listening immediately...');
+        console.log('[Voice] 🔄 TTS finished — fast mic handoff');
         setTimeout(() => {
           if (voiceStateRef.current === 'speaking' && !userStoppedVoice.current) {
-            startVoiceConversation(false); // Fresh start after speaking, not a retry
+            // fast: skip availability/prepare lag so first words are not lost
+            startVoiceConversationRef.current(false, 'fast');
           }
-        }, 300); // Reduced from 800ms to 300ms for faster response
+        }, LISTENING_POLICY.postTtsHandoffMs);
       } else {
         console.log('[Voice] 🛑 Not restarting - user stopped or state changed');
       }
@@ -710,7 +748,6 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
     
     Tts.addEventListener('tts-cancel', () => {
       console.log('[TTS] ⛔ Cancelled');
-      // Don't auto-restart, user stopped it
     });
 
     return () => {
@@ -718,7 +755,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
       Tts.removeAllListeners('tts-finish');
       Tts.removeAllListeners('tts-cancel');
     };
-  }, []); // Empty deps - setup only once
+  }, []);
 
   // Cleanup voice silence timer
   useEffect(() => {
@@ -748,10 +785,9 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
 
     return (
       <View style={[
-        styles.bubble, 
-        styles.assistantBubble, 
-        styles.skeletonBubble,
-        isTablet && { maxWidth: 600, alignSelf: 'flex-start' },
+        styles.assistantFlat,
+        styles.skeletonFlat,
+        isTablet && { maxWidth: 640, alignSelf: 'flex-start' },
       ]}>
         <View style={styles.skeletonLine1} />
         <View style={styles.skeletonLine2} />
@@ -783,18 +819,24 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         delayLongPress={300}
       >
         <Animated.View style={[
-          styles.bubble, 
-          isUser ? (theme === 'dark' ? styles.userBubble : styles.userBubbleLight) : (theme === 'dark' ? styles.assistantBubble : styles.assistantBubbleLight),
-          isTablet && { 
-            maxWidth: 600, 
-            alignSelf: isUser ? 'flex-end' : 'flex-start' 
-          },
+          isUser
+            ? [
+                styles.bubble,
+                theme === 'dark' ? styles.userBubble : styles.userBubbleLight,
+                isTablet && { maxWidth: 600, alignSelf: 'flex-end' as const },
+              ]
+            : [
+                styles.assistantFlat,
+                theme === 'light' && styles.assistantFlatLight,
+                isTablet && { maxWidth: 640, alignSelf: 'flex-start' as const },
+              ],
           showMenu && styles.bubbleHighlight,
         ]}>
           <Text style={[
-            styles.messageText, 
+            styles.messageText,
             isUser && (theme === 'dark' ? styles.userMessageText : styles.userMessageTextLight),
-            !isUser && theme === 'light' && styles.assistantMessageTextLight
+            !isUser && styles.assistantFlatText,
+            !isUser && theme === 'light' && styles.assistantFlatTextLight,
           ]}>{textToShow}</Text>
           {showMenu && (
             <View style={[styles.contextMenu, isUser ? styles.contextMenuUser : styles.contextMenuAssistant]}>
@@ -802,7 +844,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 style={styles.contextMenuItem}
                 onPress={() => {
                   triggerHaptic('light');
-                  Tts.speak(item.content);
+                  Tts.speak(preprocessTextForTTS(item.content));
                   setMessageContextMenu(null);
                 }}
               >
@@ -858,16 +900,12 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           setSupportEmail('');
           setSupportMessage('');
         }}
-        showVoucher={showVoucherModal}
-        onCloseVoucher={() => setShowVoucherModal(false)}
+        showDeviceInfo={showDeviceInfoModal}
+        onCloseDeviceInfo={() => setShowDeviceInfoModal(false)}
         supportEmail={supportEmail}
         setSupportEmail={setSupportEmail}
         supportMessage={supportMessage}
         setSupportMessage={setSupportMessage}
-        voucherInput={voucherInput}
-        setVoucherInput={setVoucherInput}
-        voucherSubmitting={voucherSubmitting}
-        setVoucherSubmitting={setVoucherSubmitting}
       />
 
       <SideDrawer
@@ -887,7 +925,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         onOpenSupport={openSupportModal}
         onOpenLanguage={openLanguageModal}
         onToggleTheme={toggleTheme}
-        onOpenVoucher={openVoucherModal}
+        onOpenDeviceInfo={openDeviceInfoModal}
         onOpenFlashCards={() => {
           toggleDrawer();
           // @ts-ignore
@@ -928,7 +966,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           renderItem={renderMessage}
           contentContainerStyle={[
             styles.listContent,
-            { paddingBottom: keyboardHeight > 0 ? keyboardHeight - 50 : 120 }
+            { paddingBottom: keyboardHeight > 0 ? keyboardHeight - 50 : 160 }
           ]}
           style={styles.list}
           ListEmptyComponent={renderEmpty}
@@ -942,7 +980,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         />
       </LinearGradient>
 
-      {/* Scroll to bottom button */}
+      {/* Scroll to bottom — icon only */}
       {showScrollButton && (
         <Animated.View 
           style={[
@@ -959,7 +997,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 {
                   translateY: scrollButtonAnim.interpolate({
                     inputRange: [0, 1],
-                    outputRange: [20, 0],
+                    outputRange: [12, 0],
                   }),
                 },
               ],
@@ -967,11 +1005,17 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           ]}
         >
           <TouchableOpacity
-            style={[styles.scrollButton, theme === 'light' && styles.scrollButtonLight]}
+            style={styles.scrollButton}
             onPress={scrollToBottom}
-            activeOpacity={0.8}
+            activeOpacity={0.6}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityLabel="Scroll to latest message"
           >
-            <Ionicons name="chevron-down" size={24} color={theme === 'dark' ? '#7DD3C0' : '#4A6FA5'} />
+            <Ionicons
+              name="chevron-down"
+              size={18}
+              color={theme === 'dark' ? 'rgba(255,255,255,0.72)' : 'rgba(26,26,31,0.55)'}
+            />
           </TouchableOpacity>
         </Animated.View>
       )}
@@ -986,6 +1030,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
           <ModeDropup
             visible={showDropup}
             theme={theme}
+            language={selectedLanguage}
             conversationModeType={conversationModeType}
             t={getTranslation}
             onClose={() => setShowDropup(false)}
@@ -1015,6 +1060,7 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
                 }, 300);
               }}
               voiceState={voiceState}
+              liveTranscript={liveTranscript}
               messageCount={messages.length}
               inputRef={inputRef}
               micPulseAnim={micPulseAnim}
@@ -1108,29 +1154,16 @@ const styles = StyleSheet.create({
   },
   scrollToBottomButton: {
     position: 'absolute',
-    right: 16,
-    bottom: 120, // Above composer
+    right: 18,
+    bottom: 156, // Slightly above composer
     zIndex: 100,
   },
   scrollButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1C1C1E',
+    width: 28,
+    height: 28,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(125, 211, 192, 0.3)',
-    shadowColor: '#7DD3C0',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  scrollButtonLight: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E5E7EB',
-    shadowColor: '#4A6FA5',
+    backgroundColor: 'transparent',
   },
   bubble: {
     maxWidth: '85%',
@@ -1153,16 +1186,29 @@ const styles = StyleSheet.create({
     shadowColor: '#7DD3C0',
     shadowOpacity: 0.2,
   },
-  assistantBubble: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1C1C1E',
-    borderBottomLeftRadius: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+  /** Kspeaker replies: flat text on chat background — no bubble chrome */
+  assistantFlat: {
+    alignSelf: 'stretch',
+    maxWidth: '100%',
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+    marginBottom: 16,
+    backgroundColor: 'transparent',
+  },
+  assistantFlatLight: {
+    backgroundColor: 'transparent',
+  },
+  assistantFlatText: {
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+  },
+  assistantFlatTextLight: {
+    color: '#1F2937',
   },
   bubbleHighlight: {
-    transform: [{ scale: 1.02 }],
-    borderColor: 'rgba(125, 211, 192, 0.5)',
+    transform: [{ scale: 1.01 }],
   },
   contextMenu: {
     position: 'absolute',
@@ -1221,23 +1267,8 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  assistantBubbleLight: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFFFF',
-    borderBottomLeftRadius: 4,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
-  },
   userMessageTextLight: {
     color: '#FFFFFF',
-  },
-  assistantMessageTextLight: {
-    color: '#1F2937',
   },
   messageText: {
     fontSize: 15,
@@ -1275,17 +1306,20 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
+    backgroundColor: 'transparent',
   },
   composerContainer: {
     width: '100%',
     maxWidth: Dimensions.get('window').width >= 768 ? 800 : '100%',
     alignSelf: 'center',
+    backgroundColor: 'transparent',
   },
   composerInner: {
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 8,
+    backgroundColor: 'transparent',
   },
-  skeletonBubble: {
+  skeletonFlat: {
     overflow: 'hidden',
     position: 'relative',
     maxWidth: '95%',

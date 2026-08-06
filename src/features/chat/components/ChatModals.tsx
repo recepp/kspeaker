@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -8,10 +8,17 @@ import {
   Switch,
   Alert,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { saveRegistration } from '../../../../registration';
 import { logError } from '../../../../logger';
+import {
+  copyToClipboard,
+  formatPlatformLabel,
+  getDeviceInformation,
+  triggerHaptic,
+  type DeviceInformation,
+} from '../../../platform';
 import type { AppLanguage, Theme } from '../types';
 import { modalStyles } from './modalStyles';
 
@@ -37,16 +44,12 @@ export interface ChatModalsProps {
   onCloseFaq: () => void;
   showSupport: boolean;
   onCloseSupport: () => void;
-  showVoucher: boolean;
-  onCloseVoucher: () => void;
+  showDeviceInfo: boolean;
+  onCloseDeviceInfo: () => void;
   supportEmail: string;
   setSupportEmail: (value: string) => void;
   supportMessage: string;
   setSupportMessage: (value: string) => void;
-  voucherInput: string;
-  setVoucherInput: (value: string) => void;
-  voucherSubmitting: boolean;
-  setVoucherSubmitting: (value: boolean) => void;
 }
 
 export function ChatModals(props: ChatModalsProps) {
@@ -72,17 +75,55 @@ export function ChatModals(props: ChatModalsProps) {
     onCloseFaq,
     showSupport,
     onCloseSupport,
-    showVoucher,
-    onCloseVoucher,
+    showDeviceInfo,
+    onCloseDeviceInfo,
     supportEmail,
     setSupportEmail,
     supportMessage,
     setSupportMessage,
-    voucherInput,
-    setVoucherInput,
-    voucherSubmitting,
-    setVoucherSubmitting,
   } = props;
+
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInformation | null>(null);
+  const [deviceInfoLoading, setDeviceInfoLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!showDeviceInfo) {
+      setCopied(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDeviceInfoLoading(true);
+    getDeviceInformation()
+      .then((info) => {
+        if (!cancelled) setDeviceInfo(info);
+      })
+      .catch((error) => {
+        logError(error as Error, 'Load device information');
+        if (!cancelled) setDeviceInfo(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDeviceInfoLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showDeviceInfo]);
+
+  const handleCopyDeviceId = () => {
+    if (!deviceInfo?.deviceId) return;
+    try {
+      copyToClipboard(deviceInfo.deviceId);
+      triggerHaptic('medium');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      logError(error as Error, 'Copy device ID');
+      Alert.alert('Error', t('deviceId'));
+    }
+  };
 
   return (
     <>
@@ -604,153 +645,93 @@ export function ChatModals(props: ChatModalsProps) {
         </View>
       )}
 
-      {/* Voucher Modal */}
-      {showVoucher && (
+      {/* Device Information Modal */}
+      {showDeviceInfo && (
         <View style={modalStyles.modalOverlay}>
           <View style={[modalStyles.modalContent, theme === 'light' && modalStyles.modalContentLight]}>
             <View style={[modalStyles.modalHeader, theme === 'light' && modalStyles.modalHeaderLight]}>
-              <Text style={[modalStyles.modalTitle, theme === 'light' && modalStyles.modalTitleLight]}>{t('addVoucher')}</Text>
-              <TouchableOpacity onPress={() => onCloseVoucher()}>
+              <Text style={[modalStyles.modalTitle, theme === 'light' && modalStyles.modalTitleLight]}>
+                {t('deviceInformation')}
+              </Text>
+              <TouchableOpacity onPress={onCloseDeviceInfo}>
                 <Ionicons name="close" size={28} color={theme === 'dark' ? '#ECECEC' : '#1A1A1F'} />
               </TouchableOpacity>
             </View>
             <View style={modalStyles.modalBody}>
-              <View style={modalStyles.voucherSection}>
-                <Ionicons name="ticket" size={64} color="#7DD3C0" style={{ alignSelf: 'center', marginBottom: 16 }} />
-                <Text style={[modalStyles.voucherTitle, theme === 'light' && modalStyles.voucherTitleLight]}>
-                  {selectedLanguage === 'tr' ? 'Premium Erişim' :
-                   selectedLanguage === 'ar' ? 'الوصول المميز' :
-                   selectedLanguage === 'ru' ? 'Премиум доступ' :
-                   'Premium Access'}
-                </Text>
-                <Text style={[modalStyles.voucherText, theme === 'light' && modalStyles.voucherTextLight]}>
-                  {selectedLanguage === 'tr' ? 'Kupon kodunuzu girerek premium özelliklere erişim sağlayın. Sınırsız konuşma, gelişmiş AI modelleri ve daha fazlası!' :
-                   selectedLanguage === 'ar' ? 'أدخل رمز القسيمة للوصول إلى الميزات المميزة. محادثات غير محدودة ونماذج ذكاء اصطناعي متقدمة والمزيد!' :
-                   selectedLanguage === 'ru' ? 'Введите код ваучера для доступа к премиум функциям. Неограниченные разговоры, продвинутые AI модели и многое другое!' :
-                   'Enter your voucher code to access premium features. Unlimited conversations, advanced AI models, and more!'}
-                </Text>
-              </View>
-
-              <View style={modalStyles.voucherInputContainer}>
-                <TextInput
-                  style={[modalStyles.voucherInput, theme === 'light' && modalStyles.voucherInputLight]}
-                  placeholder={selectedLanguage === 'tr' ? 'Kupon kodunu girin' :
-                              selectedLanguage === 'ar' ? 'أدخل رمز القسيمة' :
-                              selectedLanguage === 'ru' ? 'Введите код ваучера' :
-                              'Enter voucher code'}
-                  placeholderTextColor={theme === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)'}
-                  autoCapitalize="characters"
-                  maxLength={32}
-                  value={voucherInput}
-                  onChangeText={setVoucherInput}
-                  editable={!voucherSubmitting}
+              {deviceInfoLoading ? (
+                <ActivityIndicator
+                  size="large"
+                  color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'}
+                  style={{ marginVertical: 32 }}
                 />
-              </View>
-
-              <TouchableOpacity 
-                style={[modalStyles.voucherButton, theme === 'light' && modalStyles.voucherButtonLight, voucherSubmitting && modalStyles.supportButtonDisabled]}
-                disabled={voucherSubmitting}
-                onPress={async () => {
-                  const code = voucherInput.trim().toUpperCase();
-                  if (!code) {
-                    Alert.alert(
-                      selectedLanguage === 'tr' ? 'Eksik Bilgi' :
-                      selectedLanguage === 'ar' ? 'معلومات ناقصة' :
-                      selectedLanguage === 'ru' ? 'Недостающая информация' :
-                      'Missing Information',
-                      selectedLanguage === 'tr' ? 'Lütfen bir kupon kodu girin.' :
-                      selectedLanguage === 'ar' ? 'يرجى إدخال رمز القسيمة.' :
-                      selectedLanguage === 'ru' ? 'Пожалуйста, введите код ваучера.' :
-                      'Please enter a voucher code.',
-                      [{ text: 'OK' }]
-                    );
-                    return;
-                  }
-
-                  setVoucherSubmitting(true);
-                  try {
-                    const success = await saveRegistration(code);
-                    if (success) {
-                      setVoucherInput('');
-                      onCloseVoucher();
-                      Alert.alert(
-                        selectedLanguage === 'tr' ? 'Başarılı' :
-                        selectedLanguage === 'ar' ? 'نجاح' :
-                        selectedLanguage === 'ru' ? 'Успех' :
-                        'Success',
-                        selectedLanguage === 'tr' ? 'Kupon aktifleştirildi. Premium özellikler açıldı.' :
-                        selectedLanguage === 'ar' ? 'تم تفعيل القسيمة. الميزات المميزة متاحة الآن.' :
-                        selectedLanguage === 'ru' ? 'Ваучер активирован. Премиум функции открыты.' :
-                        'Voucher activated. Premium features unlocked.',
-                        [{ text: 'OK' }]
-                      );
-                    } else {
-                      Alert.alert(
-                        selectedLanguage === 'tr' ? 'Geçersiz Kupon' :
-                        selectedLanguage === 'ar' ? 'قسيمة غير صالحة' :
-                        selectedLanguage === 'ru' ? 'Неверный ваучер' :
-                        'Invalid Voucher',
-                        selectedLanguage === 'tr' ? 'Kupon kodu geçersiz veya kullanılamıyor.' :
-                        selectedLanguage === 'ar' ? 'رمز القسيمة غير صالح أو غير متاح.' :
-                        selectedLanguage === 'ru' ? 'Код ваучера недействителен или недоступен.' :
-                        'Voucher code is invalid or unavailable.',
-                        [{ text: 'OK' }]
-                      );
-                    }
-                  } catch (error) {
-                    logError(error as Error, 'Voucher activation');
-                    Alert.alert('Error', 'Could not activate voucher. Please try again.');
-                  } finally {
-                    setVoucherSubmitting(false);
-                  }
-                }}
-              >
-                <Ionicons name="checkmark-circle" size={24} color="#FFFFFF" />
-                <Text style={modalStyles.voucherButtonText}>
-                  {selectedLanguage === 'tr' ? 'Kuponu Aktifleştir' :
-                   selectedLanguage === 'ar' ? 'تفعيل القسيمة' :
-                   selectedLanguage === 'ru' ? 'Активировать' :
-                   'Activate Voucher'}
-                </Text>
-              </TouchableOpacity>
-
-              <View style={modalStyles.voucherDivider} />
-
-              <View style={modalStyles.voucherSection}>
-                <Text style={[modalStyles.voucherInfoTitle, theme === 'light' && modalStyles.voucherInfoTitleLight]}>
-                  {selectedLanguage === 'tr' ? '💎 Premium Özellikler' :
-                   selectedLanguage === 'ar' ? '💎 الميزات المميزة' :
-                   selectedLanguage === 'ru' ? '💎 Премиум функции' :
-                   '💎 Premium Features'}
-                </Text>
-                <View style={modalStyles.voucherFeature}>
-                  <Ionicons name="infinite" size={20} color="#7DD3C0" />
-                  <Text style={[modalStyles.voucherFeatureText, theme === 'light' && modalStyles.voucherFeatureTextLight]}>
-                    {selectedLanguage === 'tr' ? 'Sınırsız konuşma' :
-                     selectedLanguage === 'ar' ? 'محادثات غير محدودة' :
-                     selectedLanguage === 'ru' ? 'Неограниченные разговоры' :
-                     'Unlimited conversations'}
+              ) : (
+                <>
+                  <Ionicons
+                    name="phone-portrait-outline"
+                    size={48}
+                    color={theme === 'dark' ? '#7DD3C0' : '#4A9B8F'}
+                    style={{ alignSelf: 'center', marginBottom: 12 }}
+                  />
+                  <Text style={[modalStyles.deviceInfoIntro, theme === 'light' && modalStyles.deviceInfoIntroLight]}>
+                    {t('deviceIdHint')}
                   </Text>
-                </View>
-                <View style={modalStyles.voucherFeature}>
-                  <Ionicons name="trending-up" size={20} color="#7DD3C0" />
-                  <Text style={[modalStyles.voucherFeatureText, theme === 'light' && modalStyles.voucherFeatureTextLight]}>
-                    {selectedLanguage === 'tr' ? 'Gelişmiş AI modelleri' :
-                     selectedLanguage === 'ar' ? 'نماذج ذكاء اصطناعي متقدمة' :
-                     selectedLanguage === 'ru' ? 'Продвинутые AI модели' :
-                     'Advanced AI models'}
-                  </Text>
-                </View>
-                <View style={modalStyles.voucherFeature}>
-                  <Ionicons name="flash" size={20} color="#7DD3C0" />
-                  <Text style={[modalStyles.voucherFeatureText, theme === 'light' && modalStyles.voucherFeatureTextLight]}>
-                    {selectedLanguage === 'tr' ? 'Öncelikli yanıt süresi' :
-                     selectedLanguage === 'ar' ? 'وقت استجابة ذو أولوية' :
-                     selectedLanguage === 'ru' ? 'Приоритетное время ответа' :
-                     'Priority response time'}
-                  </Text>
-                </View>
-              </View>
+
+                  <View style={modalStyles.deviceInfoRow}>
+                    <Text style={[modalStyles.deviceInfoLabel, theme === 'light' && modalStyles.deviceInfoLabelLight]}>
+                      {t('deviceId')}
+                    </Text>
+                    <View style={[modalStyles.deviceIdBox, theme === 'light' && modalStyles.deviceIdBoxLight]}>
+                      <Text
+                        selectable
+                        style={[modalStyles.deviceIdValue, theme === 'light' && modalStyles.deviceIdValueLight]}
+                      >
+                        {deviceInfo?.deviceId ?? '—'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={modalStyles.deviceInfoRow}>
+                    <Text style={[modalStyles.deviceInfoLabel, theme === 'light' && modalStyles.deviceInfoLabelLight]}>
+                      {t('platform')}
+                    </Text>
+                    <Text style={[modalStyles.deviceInfoValue, theme === 'light' && modalStyles.deviceInfoValueLight]}>
+                      {deviceInfo
+                        ? `${formatPlatformLabel(deviceInfo.platform)} ${deviceInfo.systemVersion}`
+                        : '—'}
+                    </Text>
+                  </View>
+
+                  <View style={modalStyles.deviceInfoRow}>
+                    <Text style={[modalStyles.deviceInfoLabel, theme === 'light' && modalStyles.deviceInfoLabelLight]}>
+                      {t('appVersion')}
+                    </Text>
+                    <Text style={[modalStyles.deviceInfoValue, theme === 'light' && modalStyles.deviceInfoValueLight]}>
+                      {deviceInfo
+                        ? `${deviceInfo.appVersion} (${deviceInfo.buildNumber})`
+                        : '—'}
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[
+                      modalStyles.deviceInfoCopyButton,
+                      theme === 'light' && modalStyles.deviceInfoCopyButtonLight,
+                      !deviceInfo?.deviceId && modalStyles.supportButtonDisabled,
+                    ]}
+                    disabled={!deviceInfo?.deviceId}
+                    onPress={handleCopyDeviceId}
+                  >
+                    <Ionicons
+                      name={copied ? 'checkmark-circle' : 'copy-outline'}
+                      size={22}
+                      color="#FFFFFF"
+                    />
+                    <Text style={modalStyles.deviceInfoCopyButtonText}>
+                      {copied ? t('deviceIdCopied') : t('copyDeviceId')}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           </View>
         </View>
