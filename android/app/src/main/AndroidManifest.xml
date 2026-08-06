@@ -6,6 +6,8 @@
     
     <!-- Microphone - Voice Recognition için ZORUNLU (iOS: NSMicrophoneUsageDescription) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Audio focus / speaker routing for TTS + premium playback after STT -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     
     <!-- Notifications - Android 13+ (iOS: NSUserNotificationsUsageDescription) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -22,6 +24,10 @@
         <!-- Speech Recognition -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- Text-to-speech engines (Tts.voices / Google TTS discovery) -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
         
         <!-- Email/Mailto Support - Gmail, Outlook vb. email uygulamaları için -->

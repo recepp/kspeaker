@@ -736,6 +736,17 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         if (text.length > 0 && voiceStateRef.current === 'listening') {
           finalizeAndSend('silence');
         } else {
+          // Android: speech.ts owns one-shot STT restarts with backoff.
+          // A second ChatScreen stop+start loop caused mic flicker + process death.
+          if (Platform.OS === 'android') {
+            if (__DEV__) {
+              console.log('[Voice] Android warm-up silence — STT loop handles restart');
+            }
+            if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+              resetTimer();
+            }
+            return;
+          }
           if (__DEV__) console.log('[Voice] ⏸️ Silence but no text, restarting...');
           if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
             stopListening();
@@ -788,25 +799,31 @@ const ChatScreen: React.FC<ChatScreenProps> = (props) => {
         }
         
         setTimeout(() => {
-          if (voiceStateRef.current === 'listening' && !userStoppedVoice.current) {
+          if (userStoppedVoice.current) return;
+          if (voiceStateRef.current === 'listening') {
             console.log('[Voice] 🔄 Retrying after error... (attempt', voiceRetryCount.current, '/3)');
-            startVoiceConversation(true, 'normal');
-          } else if (
-            voiceStateRef.current === 'listening' ||
-            voiceStateRef.current === 'processing'
-          ) {
-            // State may have flipped during soft cleanup — recover listen loop
-            if (!userStoppedVoice.current) {
-              startVoiceConversation(true, 'fast');
-            }
-          } else {
-            console.log('[Voice] 🛑 Not retrying - user stopped or state changed');
+            startVoiceConversation(true, Platform.OS === 'android' ? 'fast' : 'normal');
           }
         }, LISTENING_POLICY.errorRetryDelayMs);
       },
       () => {
         // Native speech ended — grace already applied in speech.ts
-        finalizeAndSend('onEnd');
+        const text = currentVoiceText.current.trim();
+        if (text.length > 0 && voiceStateRef.current === 'listening') {
+          finalizeAndSend('onEnd');
+          return;
+        }
+        // Empty end: Android recognizer is one-shot and already auto-restarts
+        // in speech.ts; keep UI listening. iOS may still need a soft retry.
+        if (
+          voiceStateRef.current === 'listening' &&
+          !userStoppedVoice.current &&
+          !hasFinalized
+        ) {
+          if (__DEV__) {
+            console.log('[Voice] Empty onEnd — keeping listen session');
+          }
+        }
       },
       getSpeechLocale(selectedLanguageRef.current),
       { priority }

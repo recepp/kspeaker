@@ -51,6 +51,13 @@
 # React Native TTS
 -keep class net.no_mad.tts.** { *; }
 
+# React Native Sound (ElevenLabs / premium MP3 playback)
+-keep class com.zmxv.RNSound.** { *; }
+-dontwarn com.zmxv.RNSound.**
+
+# React Native FS (temp MP3 cache for premium TTS)
+-keep class com.rnfs.** { *; }
+
 # React Native Push Notification
 -keep class com.dieam.reactnativepushnotification.** { *; }
 

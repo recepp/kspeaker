@@ -22,17 +22,22 @@ export async function speakWithDeviceTts(
   text: string,
   handlers: DeviceHandlers = {}
 ): Promise<void> {
+  // Android needs AudioFocus (setDucking); iOS also needs silent-switch ignore.
+  try {
+    await Tts.setDucking(true);
+  } catch {
+    // older bridges
+  }
   if (Platform.OS === 'ios') {
     try {
       await Tts.setIgnoreSilentSwitch('ignore');
-      await Tts.setDucking(true);
     } catch {
       // older bridges
     }
   }
 
   await stopWithTimeout();
-  await new Promise<void>((r) => setTimeout(r, 80));
+  await new Promise<void>((r) => setTimeout(r, Platform.OS === 'android' ? 50 : 80));
 
   await new Promise<void>((resolve) => {
     let settled = false;

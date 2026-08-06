@@ -97,8 +97,8 @@ android {
         applicationId "com.kspeaker"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "1.0.1"
+        versionCode 7
+        versionName "1.0.6"
         
         // Multi-Dex support (iOS'ta otomatik)
         multiDexEnabled true

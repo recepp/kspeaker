@@ -65,14 +65,19 @@ export async function configureTtsEngine(uiLanguage: string = 'en'): Promise<voi
     console.warn('[TTS] setDefaultPitch failed:', error);
   }
 
+  try {
+    // Android: request AudioFocus so TTS is audible after SpeechRecognizer.
+    // iOS: ducking historically gated setActive; native patch also activates.
+    await Tts.setDucking(true);
+  } catch {
+    // Non-fatal on older bridges
+  }
+
   if (Platform.OS === 'ios') {
     try {
-      // Ducking flag also historically gated setActive; we now always activate
-      // in native speak(), but keep ducking on for polite mix with other audio.
-      await Tts.setDucking(true);
       await Tts.setIgnoreSilentSwitch('ignore');
     } catch {
-      // Non-fatal on older iOS bridges
+      // Non-fatal
     }
   }
 }

@@ -1,4 +1,3 @@
-import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import { isNativeSoundAvailable } from './nativeSoundAvailability';
 
@@ -31,9 +30,15 @@ function loadSoundModule(): SoundModule | null {
     const mod = require('react-native-sound');
     const Sound = (mod.default || mod) as SoundModule;
     try {
-      Sound.setCategory('Playback');
+      // Android: STREAM_MUSIC + audio focus; iOS: Playback category.
+      // mixWithOthers=false so SpeechRecognizer / other apps duck.
+      Sound.setCategory('Playback', false);
     } catch {
-      // non-fatal
+      try {
+        Sound.setCategory('Playback');
+      } catch {
+        // non-fatal
+      }
     }
     return Sound;
   } catch (error) {
@@ -100,12 +105,10 @@ class AudioFilePlayer {
         }
 
         this.sound = sound;
-        if (Platform.OS === 'ios') {
-          try {
-            sound.setVolume(1.0);
-          } catch {
-            // ignore
-          }
+        try {
+          sound.setVolume(1.0);
+        } catch {
+          // ignore
         }
         handlers.onStart?.();
 

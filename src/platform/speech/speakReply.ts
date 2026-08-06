@@ -1,9 +1,8 @@
-import Voice from '@react-native-community/voice';
 import { preprocessTextForTTS } from '../ttsText';
-import { LISTENING_POLICY } from '../../shared/speech/listeningPolicy';
 import { speakWithDeviceTts, stopDeviceTts } from './deviceTts';
 import { elevenLabsClient } from './elevenLabsClient';
 import { isNativeSoundAvailable } from './nativeSoundAvailability';
+import { releaseMicForPlayback } from './micRelease';
 
 export type SpeakReplyHandlers = {
   onStart?: () => void;
@@ -31,26 +30,6 @@ async function getAudioPlayer() {
   }
 }
 
-async function releaseMicForPlayback(): Promise<void> {
-  try {
-    try {
-      await Voice.stop();
-    } catch {
-      // ignore
-    }
-    try {
-      await Voice.cancel();
-    } catch {
-      // ignore
-    }
-  } catch {
-    // ignore
-  }
-  await new Promise<void>((r) =>
-    setTimeout(r, LISTENING_POLICY.preTtsReleaseMs)
-  );
-}
-
 /** Stop engines only — does NOT cancel the in-flight speakReply generation. */
 async function stopActivePlayback(): Promise<void> {
   const stops: Promise<void>[] = [stopDeviceTts()];
@@ -68,6 +47,7 @@ async function stopActivePlayback(): Promise<void> {
 
 /**
  * Prefer Railway ElevenLabs (premium); always fall back to device TTS.
+ * Mic release is shared via micRelease (iOS + Android); speech.ts registers session hooks.
  */
 export async function speakReply(
   text: string,
@@ -108,14 +88,13 @@ export async function speakReply(
   if (!isNativeSoundAvailable()) {
     if (__DEV__) {
       console.warn(
-        '[Speech] RNSound missing — premium TTS skipped (rebuild app with pods)'
+        '[Speech] RNSound missing — premium TTS skipped (rebuild app with native module)'
       );
     }
     await runDevice();
     return;
   }
 
-  // Leave "processing" while we fetch; real audio start may come from player
   handlers.onStart?.();
 
   const synth = await Promise.race([

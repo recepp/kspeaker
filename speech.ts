@@ -7,7 +7,22 @@ import {
   hasMicrophonePermission,
 } from './src/platform/permissions';
 import { LISTENING_POLICY, type ListenStartPriority } from './src/shared/speech/listeningPolicy';
+import {
+  ANDROID_LISTEN_LOOP,
+  AUDIO_HANDOFF,
+  VOICE_AGGRESSIVE_DESTROY_PASSES,
+} from './src/shared/speech/audioPlatform';
 import { pickBestHypothesis } from './src/shared/speech/mergeTranscript';
+import {
+  registerMicSessionHooks,
+  releaseMicForPlayback as releaseMicCore,
+} from './src/platform/speech/micRelease';
+import {
+  AndroidListenLoop,
+  restartAndroidRecognition,
+  startAndroidRecognition,
+  type AndroidRestartReason,
+} from './src/platform/speech/androidSttEngine';
 
 // ============================================
 // GLOBAL TYPE DECLARATIONS
@@ -137,6 +152,12 @@ interface VoiceState {
   audioFormatErrorCount: number; // Track consecutive audio format errors
   /** Ignore native errors while we intentionally stop/cancel (prevents UNKNOWN loops). */
   suppressingErrors: boolean;
+  /** Last locale passed to Voice.start — needed for Android one-shot restarts. */
+  activeLocale: string;
+  /** True once partial/final hypothesis arrived in this recognition segment. */
+  gotHypothesis: boolean;
+  /** Consecutive empty Android one-shot ends in this mic session. */
+  emptyRestartCount: number;
 }
 
 enum VoiceErrorType {
@@ -160,6 +181,9 @@ class VoiceStateManager {
     callbacks: null,
     audioFormatErrorCount: 0,
     suppressingErrors: false,
+    activeLocale: 'en-US',
+    gotHypothesis: false,
+    emptyRestartCount: 0,
   };
 
   getState(): VoiceState {
@@ -186,6 +210,33 @@ class VoiceStateManager {
     return this.state.suppressingErrors;
   }
 
+  setActiveLocale(locale: string): void {
+    this.state.activeLocale = locale || 'en-US';
+  }
+
+  setGotHypothesis(value: boolean): void {
+    this.state.gotHypothesis = value;
+    if (value) {
+      this.state.emptyRestartCount = 0;
+    }
+  }
+
+  /** Recognizer became ready — treat like iOS session still healthy. */
+  markRecognizerReady(): void {
+    this.state.emptyRestartCount = 0;
+    this.state.isListening = true;
+    this.state.audioFormatErrorCount = 0;
+  }
+
+  bumpEmptyRestartCount(): number {
+    this.state.emptyRestartCount += 1;
+    return this.state.emptyRestartCount;
+  }
+
+  resetEmptyRestartCount(): void {
+    this.state.emptyRestartCount = 0;
+  }
+
   incrementAudioFormatError(): void {
     this.state.audioFormatErrorCount++;
   }
@@ -205,6 +256,9 @@ class VoiceStateManager {
       callbacks: null,
       audioFormatErrorCount: 0,
       suppressingErrors: false,
+      activeLocale: 'en-US',
+      gotHypothesis: false,
+      emptyRestartCount: 0,
     };
   }
 
@@ -237,27 +291,53 @@ class VoiceErrorHandler {
   }
 
   /**
+   * True empty capture ends (timeout / no match) — safe to soft-restart on Android.
+   * Do NOT include ERROR_CLIENT here; rapid restart on client errors kills Samsung processes.
+   */
+  static isEmptyCaptureEnd(error: any): boolean {
+    const { code, message, raw } = this.normalize(error);
+    const blob = `${code} ${message} ${raw}`;
+    if (
+      code === '6' ||
+      code === '7' ||
+      code === 'speech_timeout' ||
+      code === 'no_match'
+    ) {
+      return true;
+    }
+    return (
+      blob.includes('no speech') ||
+      blob.includes('no match') ||
+      blob.includes('speech timeout') ||
+      blob.includes('speech not detected') ||
+      blob.includes('no audio')
+    );
+  }
+
+  static isClientGlitch(error: any): boolean {
+    const { code, message, raw } = this.normalize(error);
+    const blob = `${code} ${message} ${raw}`;
+    return (
+      code === '5' ||
+      blob.includes('client side error') ||
+      blob.includes('error_client')
+    );
+  }
+
+  /**
    * Benign end-of-utterance / empty capture — treat as graceful end, not failure.
    */
   static isBenignEnd(error: any): boolean {
+    if (this.isEmptyCaptureEnd(error) || this.isClientGlitch(error)) {
+      return true;
+    }
     const { code, message, raw } = this.normalize(error);
     const blob = `${code} ${message} ${raw}`;
 
-    // Android SpeechRecognizer codes
-    if (code === '6' || code === '7' || code === 'speech_timeout' || code === 'no_match') {
-      return true;
-    }
-
     return (
       code === 'recognition_fail' ||
-      blob.includes('no speech') ||
       blob.includes('1110') ||
       blob.includes('203') || // iOS retry / no speech-ish
-      blob.includes('no audio') ||
-      blob.includes('speech not detected') ||
-      blob.includes('no match') ||
-      blob.includes('speech timeout') ||
-      blob.includes('client side error') ||
       blob.includes('"error":false') ||
       blob === '""' ||
       blob === '{}' ||
@@ -448,50 +528,37 @@ class VoiceCleanupService {
 
   static async aggressiveReset(additionalWait: number = 0): Promise<void> {
     try {
-      log.info('Voice', 'AGGRESSIVE RESET - destroying iOS audio session...');
+      const passes = VOICE_AGGRESSIVE_DESTROY_PASSES;
+      log.info(
+        'Voice',
+        `Aggressive reset (${Platform.OS}, ${passes} destroy pass${passes > 1 ? 'es' : ''})...`
+      );
       stateManager.setSuppressingErrors(true);
-      
-      // Step 1: Stop any active recognition
+
       try {
         await Voice.stop();
-        await this.delay(300);
-      } catch (e) {
+        await this.delay(Platform.OS === 'android' ? 150 : 300);
+      } catch {
         log.warning('Voice', 'Voice.stop() (ok if not running)');
       }
-      
-      // Step 2: Remove all event listeners
+
       Voice.removeAllListeners();
-      await this.delay(200);
-      
-      // Step 3: First destroy
-      try {
-        await Voice.destroy();
-        await this.delay(600); // Longer wait for iOS
-      } catch (e) {
-        log.warning('Voice', 'First destroy done');
+      await this.delay(Platform.OS === 'android' ? 100 : 200);
+
+      // iOS: triple-destroy clears stubborn AVAudioSession; Android: one destroy is enough
+      for (let i = 0; i < passes; i += 1) {
+        try {
+          await Voice.destroy();
+          await this.delay(Platform.OS === 'android' ? 250 : 600);
+        } catch {
+          log.warning('Voice', `Destroy pass ${i + 1} (expected)`);
+        }
       }
-      
-      // Step 4: Second destroy (iOS workaround)
-      try {
-        await Voice.destroy();
-        await this.delay(600);
-      } catch (e) {
-        log.warning('Voice', 'Second destroy (expected)');
-      }
-      
-      // Step 5: Third destroy for stubborn iOS audio session
-      try {
-        await Voice.destroy();
-        await this.delay(400);
-      } catch (e) {
-        log.warning('Voice', 'Third destroy (expected)');
-      }
-      
-      // Step 6: Additional wait for audio session stabilization
+
       if (additionalWait > 0) {
         await this.delay(additionalWait);
       }
-      
+
       log.info('Voice', 'Aggressive reset complete');
     } catch (error) {
       log.error('Voice', 'Aggressive reset error', error);
@@ -531,11 +598,45 @@ class VoicePermissionService {
   static async check(): Promise<boolean> {
     try {
       const permissionOk = await hasMicrophonePermission();
-      if (!permissionOk) return false;
+      if (!permissionOk) {
+        const requested = await requestMicrophonePermission();
+        if (!requested) return false;
+      }
+
+      // Android Voice native module can be briefly null before bridge settle;
+      // coerce 0|1|boolean and fall back to speech-service discovery.
       const available = await Voice.isAvailable();
-      return !!available;
+      // Android bridge may return 0|1 (typed); some runtimes coerce to boolean
+      const availableFlag = Number(available as number | boolean) === 1;
+      if (availableFlag) {
+        return true;
+      }
+
+      if (Platform.OS === 'android') {
+        try {
+          const services = await Voice.getSpeechRecognitionServices?.();
+          if (Array.isArray(services) && services.length > 0) {
+            log.info('Voice', `Android STT engines: ${services.join(', ')}`);
+            return true;
+          }
+        } catch (servicesError) {
+          log.warning('Voice', 'getSpeechRecognitionServices failed', servicesError);
+        }
+        // Mic granted — allow start attempt; real failures surface from Voice.start
+        return true;
+      }
+
+      return false;
     } catch (error) {
       log.error('Voice', 'Permission check failed', error);
+      // Android: don't hard-block on flaky isAvailable if mic is granted
+      if (Platform.OS === 'android') {
+        try {
+          return await hasMicrophonePermission();
+        } catch {
+          return false;
+        }
+      }
       return false;
     }
   }
@@ -555,16 +656,81 @@ class VoiceEventService {
     }
   }
 
+  static clearAndroidRestart(): void {
+    AndroidListenLoop.clear();
+  }
+
+  /**
+   * Perform one Android segment restart (invoked only by AndroidListenLoop).
+   */
+  static async runAndroidRestart(
+    stateManager: VoiceStateManager,
+    reason: AndroidRestartReason
+  ): Promise<void> {
+    const state = stateManager.getState();
+    if (!state.callbacks || stateManager.isSuppressingErrors()) return;
+
+    const attempt = stateManager.bumpEmptyRestartCount();
+    if (attempt > ANDROID_LISTEN_LOOP.maxEmptyRestarts) {
+      log.warning(
+        'Voice',
+        `Android idle cap (${ANDROID_LISTEN_LOOP.maxEmptyRestarts}) — ending session`
+      );
+      stateManager.setListening(false);
+      const errorCallback = state.callbacks.onError;
+      stateManager.setCallbacks(null);
+      errorCallback?.();
+      return;
+    }
+
+    const locale = state.activeLocale || 'en-US';
+    try {
+      log.info(
+        'Voice',
+        `Android STT segment #${attempt} (${reason}, ${locale})`
+      );
+      stateManager.setGotHypothesis(false);
+      await restartAndroidRecognition(locale);
+      stateManager.setListening(true);
+    } catch (error) {
+      log.warning('Voice', 'Android STT restart failed', error);
+      if (stateManager.getState().callbacks) {
+        AndroidListenLoop.queueRestart('client_glitch');
+      }
+    }
+  }
+
+  /** Empty native segment → keep UI listening; queue at most one delayed restart. */
+  static handleAndroidEmptySegment(
+    stateManager: VoiceStateManager,
+    source: 'error' | 'end',
+    reason: AndroidRestartReason
+  ): void {
+    if (!AndroidListenLoop.noteEmptySegmentEnd(source)) {
+      if (__DEV__) {
+        log.info('Voice', `Ignoring duplicate Android ${source} for same segment`);
+      }
+      return;
+    }
+    stateManager.setListening(false);
+    if (!stateManager.getState().callbacks) return;
+    AndroidListenLoop.queueRestart(reason);
+  }
+
   static setup(stateManager: VoiceStateManager): void {
     log.info('Voice', 'Setting up event handlers...');
     
     this.clearPendingEnd();
+    this.clearAndroidRestart();
     Voice.removeAllListeners();
+
+    AndroidListenLoop.setRestartHandler((reason) =>
+      this.runAndroidRestart(stateManager, reason)
+    );
     
     Voice.onSpeechStart = () => {
       log.info('Voice', 'Speech started - mic is active');
-      stateManager.setListening(true);
-      stateManager.resetAudioFormatErrorCount();
+      stateManager.markRecognizerReady();
     };
 
     Voice.onSpeechRecognized = () => {
@@ -575,6 +741,7 @@ class VoiceEventService {
       const callbacks = stateManager.getState().callbacks;
       const best = pickBestHypothesis(event.value);
       if (!best || !callbacks?.onResult) return;
+      stateManager.setGotHypothesis(true);
       log.info('Voice', `${label}: "${best}"`);
       callbacks.onResult(best);
     };
@@ -588,7 +755,6 @@ class VoiceEventService {
     };
 
     Voice.onSpeechError = async (event: SpeechErrorEvent) => {
-      // stop()/cancel() often emit a follow-up error — ignore those
       if (stateManager.isSuppressingErrors()) {
         if (__DEV__) log.info('Voice', 'Ignoring speech error during intentional stop');
         return;
@@ -600,13 +766,34 @@ class VoiceEventService {
       
       const callbacks = stateManager.getState().callbacks;
       const errorType = VoiceErrorHandler.categorizeError(event);
+      const hadText = stateManager.getState().gotHypothesis;
+      const emptyCapture = VoiceErrorHandler.isEmptyCaptureEnd(event?.error ?? event);
+      const clientGlitch = VoiceErrorHandler.isClientGlitch(event?.error ?? event);
 
-      // Empty / timeout / no-match → same as natural end (send if we have text)
       if (
         errorType === VoiceErrorType.NO_MATCH ||
-        VoiceErrorHandler.isBenignEnd(event?.error)
+        VoiceErrorHandler.isBenignEnd(event?.error) ||
+        emptyCapture ||
+        clientGlitch
       ) {
-        log.info('Voice', 'Benign speech end — finalize if any text');
+        if (hadText) {
+          AndroidListenLoop.noteEmptySegmentEnd('error');
+          stateManager.setListening(false);
+          log.info('Voice', 'Utterance complete — finalize captured text');
+          this.endGraceTimer = setTimeout(() => {
+            this.endGraceTimer = null;
+            callbacks?.onEnd?.();
+          }, LISTENING_POLICY.endGraceMs);
+          return;
+        }
+        if (Platform.OS === 'android' && callbacks) {
+          this.handleAndroidEmptySegment(
+            stateManager,
+            'error',
+            clientGlitch && !emptyCapture ? 'client_glitch' : 'empty'
+          );
+          return;
+        }
         stateManager.setListening(false);
         this.endGraceTimer = setTimeout(() => {
           this.endGraceTimer = null;
@@ -615,8 +802,11 @@ class VoiceEventService {
         return;
       }
 
-      // Recognizer busy after TTS handoff — quiet soft retry via onError
       if (errorType === VoiceErrorType.BUSY) {
+        if (Platform.OS === 'android' && callbacks && !hadText) {
+          this.handleAndroidEmptySegment(stateManager, 'error', 'client_glitch');
+          return;
+        }
         stateManager.setListening(false);
         await VoiceErrorHandler.handleError(errorType, stateManager);
         if (callbacks?.onError) {
@@ -635,7 +825,7 @@ class VoiceEventService {
         errorCallback();
       }
       
-      if (!canRecover && errorType === VoiceErrorType.AUDIO_FORMAT) {
+      if (!canRecover && errorType === VoiceErrorType.AUDIO_FORMAT && __DEV__) {
         Alert.alert(
           'Microphone Issue',
           'Unable to start voice recognition. Please close and reopen the app.',
@@ -646,12 +836,23 @@ class VoiceEventService {
 
     Voice.onSpeechEnd = () => {
       log.info('Voice', 'Speech ended — waiting for final hypothesis');
-      stateManager.setListening(false);
       this.clearPendingEnd();
       this.endGraceTimer = setTimeout(() => {
         this.endGraceTimer = null;
-        const callbacks = stateManager.getState().callbacks;
-        callbacks?.onEnd?.();
+        const state = stateManager.getState();
+        if (state.gotHypothesis) {
+          AndroidListenLoop.noteEmptySegmentEnd('end');
+          stateManager.setListening(false);
+          state.callbacks?.onEnd?.();
+          return;
+        }
+        if (Platform.OS === 'android' && state.callbacks) {
+          // If onSpeechError already queued restart, this is a no-op.
+          this.handleAndroidEmptySegment(stateManager, 'end', 'empty');
+          return;
+        }
+        stateManager.setListening(false);
+        state.callbacks?.onEnd?.();
       }, LISTENING_POLICY.endGraceMs);
     };
     
@@ -664,6 +865,13 @@ class VoiceEventService {
 // ============================================
 
 const stateManager = new VoiceStateManager();
+
+registerMicSessionHooks({
+  setSuppressingErrors: (value) => stateManager.setSuppressingErrors(value),
+  clearPendingEnd: () => VoiceEventService.clearPendingEnd(),
+  setListening: (value) => stateManager.setListening(value),
+  onWarning: (message, error) => log.warning('Voice', message, error),
+});
 
 // ============================================
 // PUBLIC API (Clean, Simple Interface)
@@ -718,33 +926,11 @@ export interface StartListeningOptions {
 let voiceAvailableCache: boolean | null = null;
 
 /**
- * Release the mic / audio session so device TTS can play.
- * Must run before every speak — overlapping Voice recognition causes
- * AUDIO_FORMAT and total silence on iOS.
+ * Release the mic / audio session so TTS (device or premium) can play.
+ * Shared by iOS + Android — suppress follow-up Voice errors during stop.
  */
 export async function releaseMicForPlayback(): Promise<void> {
-  try {
-    stateManager.setSuppressingErrors(true);
-    VoiceEventService.clearPendingEnd();
-    try {
-      await Voice.stop();
-    } catch {
-      // ignore
-    }
-    try {
-      await Voice.cancel();
-    } catch {
-      // ignore
-    }
-    stateManager.setListening(false);
-    await new Promise<void>((r) =>
-      setTimeout(r, LISTENING_POLICY.preTtsReleaseMs)
-    );
-  } catch (error) {
-    log.warning('Voice', 'releaseMicForPlayback failed (continuing)', error);
-  } finally {
-    stateManager.setSuppressingErrors(false);
-  }
+  return releaseMicCore();
 }
 
 /**
@@ -821,6 +1007,10 @@ export async function startListening(
     }
 
     stateManager.setCallbacks({ onResult, onError, onEnd });
+    stateManager.setActiveLocale(locale);
+    stateManager.setGotHypothesis(false);
+    // Every UI / post-TTS listen begins a fresh empty budget (iOS session reset)
+    stateManager.resetEmptyRestartCount();
     VoiceEventService.setup(stateManager);
 
     log.info('Voice', `Starting recognition with locale ${locale}...`);
@@ -830,6 +1020,7 @@ export async function startListening(
       // Locale pack missing → fall back to en-US once, then surface error
       if (locale !== 'en-US' && VoiceErrorHandler.categorizeError(startError) === VoiceErrorType.LOCALE) {
         log.warning('Voice', `Locale ${locale} failed — retrying en-US`);
+        stateManager.setActiveLocale('en-US');
         await startNativeRecognition('en-US');
       } else {
         throw startError;
@@ -854,14 +1045,7 @@ export async function startListening(
 
 async function startNativeRecognition(locale: string): Promise<void> {
   if (Platform.OS === 'android') {
-    await Voice.start(locale, {
-      EXTRA_LANGUAGE_MODEL: 'LANGUAGE_MODEL_FREE_FORM',
-      EXTRA_MAX_RESULTS: 5,
-      EXTRA_PARTIAL_RESULTS: true,
-      EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
-      EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 1500,
-      EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 800,
-    });
+    await startAndroidRecognition(locale);
   } else {
     await Voice.start(locale);
   }
@@ -872,24 +1056,29 @@ async function startNativeRecognition(locale: string): Promise<void> {
  */
 export async function stopListening(): Promise<void> {
   const state = stateManager.getState();
-  
-  if (!state.isListening) {
+  VoiceEventService.clearPendingEnd();
+  VoiceEventService.clearAndroidRestart();
+
+  // Android may be between one-shot sessions (isListening=false, callbacks still set)
+  if (!state.isListening && !state.callbacks) {
     log.info('Voice', 'Not listening, skipping stop');
-    VoiceEventService.clearPendingEnd();
     return;
   }
 
   try {
     log.info('Voice', 'Stopping...');
-    VoiceEventService.clearPendingEnd();
+    stateManager.setSuppressingErrors(true);
     await VoiceCleanupService.softCleanup();
     stateManager.setListening(false);
     stateManager.setCallbacks(null);
+    stateManager.setGotHypothesis(false);
     log.info('Voice', 'Stopped');
   } catch (error) {
     log.error('Voice', 'Stop error', error);
     stateManager.setListening(false);
     stateManager.setCallbacks(null);
+  } finally {
+    stateManager.setSuppressingErrors(false);
   }
 }
 
@@ -900,9 +1089,11 @@ export async function cancelListening(): Promise<void> {
   try {
     log.info('Voice', 'Cancelling...');
     VoiceEventService.clearPendingEnd();
+    VoiceEventService.clearAndroidRestart();
     await VoiceCleanupService.cancel();
     stateManager.setListening(false);
     stateManager.setCallbacks(null);
+    stateManager.setGotHypothesis(false);
     log.info('Voice', 'Cancelled');
   } catch (error) {
     log.error('Voice', 'Cancel error', error);
@@ -918,6 +1109,7 @@ export async function destroyVoice(): Promise<void> {
   try {
     log.info('Voice', 'Destroying...');
     VoiceEventService.clearPendingEnd();
+    VoiceEventService.clearAndroidRestart();
     await VoiceCleanupService.aggressiveReset(500);
     stateManager.reset();
     log.info('Voice', 'Destroyed');
